@@ -1,0 +1,44 @@
+# New datasets for v2. Verify column names against YOUR files; matching is case-insensitive.
+stocks:
+  code: stocks
+  name: "Nifty 50 constituents, daily prices (one file per stock)"
+  file_glob: "data/raw/stocks/*.csv*"
+  symbol_from: filename            # filename stem is the symbol if there is no symbol column
+  date_format: null                # auto-detect
+  columns:
+    date: [date]
+    open: [open]
+    high: [high]
+    low: [low]
+    close: [close, close price]
+    volume: [volume]
+    turnover: [turnover]
+    symbol: [symbol]
+  limitation: "Prices are not adjusted for splits/bonus unless the source says so. Constituents changed over time."
+
+meta:
+  code: meta
+  name: "Stock master: company name, symbol, industry"
+  file_glob: "data/raw/meta/*.csv*"
+  columns:
+    symbol: [symbol]
+    company: [company name, company, name]
+    industry: [industry, sector]
+    isin: [isin, isin code]
+  industry_to_sector:             # map the source's industry labels to our 10 sectors (extend after viewing real labels)
+    "FINANCIAL SERVICES": Financial Services
+    "BANKING": Financial Services
+    "IT": IT
+    "INFORMATION TECHNOLOGY": IT
+    "AUTOMOBILE": Automobile
+    "PHARMA": Pharma
+    "OIL & GAS": Energy
+    "ENERGY": Energy
+    "POWER": Energy
+    "FMCG": FMCG
+    "METALS": Metals
+    "CEMENT & CEMENT PRODUCTS": Infrastructure
+    "CONSTRUCTION": Infrastructure
+    "TELECOM": Telecom
+    "CONSUMER GOODS": Consumer
+  fallback: "config/stocks.yaml"   # used when meta file is missing or an industry is unmapped

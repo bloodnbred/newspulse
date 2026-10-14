@@ -1,0 +1,16 @@
+# v2 events (kept separate from v1 config/events.yaml so nothing is overwritten). event_type feeds dim_event.
+events_v2:
+  - {date: "2016-02-29", label: "Union Budget 2016",                    type: budget}
+  - {date: "2016-06-24", label: "Brexit referendum result",             type: global}
+  - {date: "2016-11-08", label: "Demonetisation announced",             type: policy}
+  - {date: "2017-02-01", label: "Union Budget 2017",                    type: budget}
+  - {date: "2017-07-01", label: "GST introduced",                       type: policy}
+  - {date: "2018-02-01", label: "Union Budget 2018",                    type: budget}
+  - {date: "2018-09-21", label: "IL&FS default fears (market sell-off)", type: crisis}
+  - {date: "2019-02-01", label: "Interim Budget 2019",                  type: budget}
+  - {date: "2019-05-23", label: "General election results",             type: election}
+  - {date: "2019-07-05", label: "Union Budget 2019",                    type: budget}
+  - {date: "2019-09-20", label: "Corporate tax cut announced",          type: policy}
+  - {date: "2020-02-01", label: "Union Budget 2020",                    type: budget}
+  - {date: "2020-03-24", label: "COVID-19 national lockdown announced", type: shock}
+# Only events inside the loaded window are used. Verify dates before quoting them in the report.

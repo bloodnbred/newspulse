@@ -187,6 +187,24 @@ def build(
 
 
 @app.command()
+def load(
+    db: DbOpt = None, sample: SampleOpt = None, years: YearsOpt = 5,
+    chunk: ChunkOpt = 100_000,
+) -> None:
+    """Alias of `build` (v2 name)."""
+    build(db=db, sample=sample, years=years, chunk=chunk)
+
+
+@app.command()
+def infer(
+    db: DbOpt = None, years: YearsOpt = 5,
+    out: Annotated[Path | None, typer.Option("--out")] = None,
+) -> None:
+    """Alias of `report` (v2 name)."""
+    report(db=db, years=years, out=out)
+
+
+@app.command()
 def olap(
     db: DbOpt = None,
     operation: Annotated[

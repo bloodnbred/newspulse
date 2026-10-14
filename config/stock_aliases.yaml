@@ -1,0 +1,55 @@
+# How headlines refer to companies. Extend after reading real matches in the audit sample.
+# ambiguous: aliases that are also common words or group names -> need business context to count
+# case_sensitive: short tickers/abbreviations that must match exact case
+context_words: [shares, share, stock, stocks, sensex, nifty, profit, loss, quarter, q1, q2, q3, q4, results,
+                earnings, dividend, ipo, market, investors, brokerage, target, rating, merger, acquisition,
+                stake, revenue, rbi, bse, nse, rally, slump, surge, fall, falls, gains]
+use_topic_as_context: Business      # a headline whose topic is Business also counts as context
+aliases:
+  RELIANCE:   {names: ["Reliance Industries", "Reliance", "RIL"], ambiguous: ["Reliance"], case_sensitive: ["RIL"]}
+  TCS:        {names: ["TCS", "Tata Consultancy"], case_sensitive: ["TCS"]}
+  HDFCBANK:   {names: ["HDFC Bank"]}
+  HDFC:       {names: ["HDFC"], ambiguous: ["HDFC"], case_sensitive: ["HDFC"]}
+  INFY:       {names: ["Infosys"]}
+  ICICIBANK:  {names: ["ICICI Bank"]}
+  HINDUNILVR: {names: ["Hindustan Unilever", "HUL"], case_sensitive: ["HUL"]}
+  ITC:        {names: ["ITC"], ambiguous: ["ITC"], case_sensitive: ["ITC"]}
+  SBIN:       {names: ["State Bank of India", "SBI"], ambiguous: ["SBI"], case_sensitive: ["SBI"]}
+  BHARTIARTL: {names: ["Bharti Airtel", "Airtel"]}
+  KOTAKBANK:  {names: ["Kotak Mahindra Bank", "Kotak Bank"]}
+  LT:         {names: ["Larsen & Toubro", "L&T"], ambiguous: ["L&T"]}
+  AXISBANK:   {names: ["Axis Bank"]}
+  ASIANPAINT: {names: ["Asian Paints"]}
+  MARUTI:     {names: ["Maruti Suzuki", "Maruti"], ambiguous: ["Maruti"]}
+  SUNPHARMA:  {names: ["Sun Pharma", "Sun Pharmaceutical"]}
+  TITAN:      {names: ["Titan"], ambiguous: ["Titan"]}
+  BAJFINANCE: {names: ["Bajaj Finance"]}
+  BAJAJFINSV: {names: ["Bajaj Finserv"]}
+  WIPRO:      {names: ["Wipro"]}
+  HCLTECH:    {names: ["HCL Technologies", "HCL Tech"]}
+  TECHM:      {names: ["Tech Mahindra"]}
+  ONGC:       {names: ["ONGC"], case_sensitive: ["ONGC"]}
+  NTPC:       {names: ["NTPC"], case_sensitive: ["NTPC"]}
+  POWERGRID:  {names: ["Power Grid"], ambiguous: ["Power Grid"]}
+  COALINDIA:  {names: ["Coal India"]}
+  BPCL:       {names: ["BPCL", "Bharat Petroleum"], case_sensitive: ["BPCL"]}
+  IOC:        {names: ["Indian Oil", "IOC"], ambiguous: ["Indian Oil", "IOC"], case_sensitive: ["IOC"]}
+  GAIL:       {names: ["GAIL"], case_sensitive: ["GAIL"]}
+  TATAMOTORS: {names: ["Tata Motors"]}
+  M&M:        {names: ["Mahindra & Mahindra", "M&M"], ambiguous: ["M&M"]}
+  BAJAJ-AUTO: {names: ["Bajaj Auto"]}
+  HEROMOTOCO: {names: ["Hero MotoCorp"]}
+  EICHERMOT:  {names: ["Eicher Motors"]}
+  DRREDDY:    {names: ["Dr Reddy's", "Dr. Reddy's"]}
+  CIPLA:      {names: ["Cipla"]}
+  TATASTEEL:  {names: ["Tata Steel"]}
+  JSWSTEEL:   {names: ["JSW Steel"]}
+  HINDALCO:   {names: ["Hindalco"]}
+  VEDL:       {names: ["Vedanta"]}
+  ULTRACEMCO: {names: ["UltraTech Cement", "UltraTech"]}
+  GRASIM:     {names: ["Grasim"]}
+  ADANIPORTS: {names: ["Adani Ports"]}
+  NESTLEIND:  {names: ["Nestle India"]}
+  BRITANNIA:  {names: ["Britannia"], ambiguous: ["Britannia"]}
+  INDUSINDBK: {names: ["IndusInd Bank"]}
+  YESBANK:    {names: ["Yes Bank"]}

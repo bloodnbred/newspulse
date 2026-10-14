@@ -1,0 +1,13 @@
+# Sector-level news lexicon: fallback when stock mentions are sparse. Lowercase, word-boundary match.
+# A headline can belong to several sectors. Extend after reviewing matches.
+sectors:
+  Financial Services: [bank, banks, banking, rbi, loan, loans, npa, npas, nbfc, insurance, credit, repo rate, interest rate, mutual fund]
+  IT: [it sector, software, it services, infosys, tcs, wipro, outsourcing, h-1b, h1b, tech mahindra, hcl]
+  Automobile: [auto sales, car sales, carmaker, automaker, two-wheeler, passenger vehicle, electric vehicle, maruti, tata motors, bs-vi]
+  Pharma: [pharma, drug, drugs, usfda, generic, vaccine, medicine prices, drug pricing]
+  Energy: [crude, oil prices, petrol, diesel, ongc, power sector, coal, electricity, lng, refinery, opec]
+  FMCG: [fmcg, consumer goods, packaged food, hul, nestle, itc, rural demand]
+  Metals: [steel, metal, metals, aluminium, copper, iron ore, vedanta, tata steel]
+  Infrastructure: [infrastructure, infra, cement, highway, highways, construction, real estate, housing, ports]
+  Telecom: [telecom, spectrum, jio, airtel, vodafone, 5g, 4g, tariff, trai]
+  Consumer: [jewellery, gold, paint, paints, consumer durables, retail, e-commerce]

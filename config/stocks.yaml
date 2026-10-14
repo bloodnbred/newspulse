@@ -1,0 +1,51 @@
+# Sector fallback and master list. Verify against the symbols in YOUR downloaded data.
+# Constituents of the Nifty 50 changed between 2015 and 2020; stocks not in your data are ignored.
+sectors: [Financial Services, IT, Automobile, Pharma, Energy, FMCG, Metals, Infrastructure, Telecom, Consumer]
+stocks:
+  RELIANCE:   {company: "Reliance Industries", sector: Energy}
+  TCS:        {company: "Tata Consultancy Services", sector: IT}
+  HDFCBANK:   {company: "HDFC Bank", sector: Financial Services}
+  INFY:       {company: "Infosys", sector: IT}
+  ICICIBANK:  {company: "ICICI Bank", sector: Financial Services}
+  HDFC:       {company: "Housing Development Finance Corporation", sector: Financial Services}
+  HINDUNILVR: {company: "Hindustan Unilever", sector: FMCG}
+  ITC:        {company: "ITC", sector: FMCG}
+  SBIN:       {company: "State Bank of India", sector: Financial Services}
+  BHARTIARTL: {company: "Bharti Airtel", sector: Telecom}
+  KOTAKBANK:  {company: "Kotak Mahindra Bank", sector: Financial Services}
+  LT:         {company: "Larsen & Toubro", sector: Infrastructure}
+  AXISBANK:   {company: "Axis Bank", sector: Financial Services}
+  ASIANPAINT: {company: "Asian Paints", sector: Consumer}
+  MARUTI:     {company: "Maruti Suzuki India", sector: Automobile}
+  SUNPHARMA:  {company: "Sun Pharmaceutical", sector: Pharma}
+  TITAN:      {company: "Titan Company", sector: Consumer}
+  BAJFINANCE: {company: "Bajaj Finance", sector: Financial Services}
+  BAJAJFINSV: {company: "Bajaj Finserv", sector: Financial Services}
+  WIPRO:      {company: "Wipro", sector: IT}
+  HCLTECH:    {company: "HCL Technologies", sector: IT}
+  TECHM:      {company: "Tech Mahindra", sector: IT}
+  ONGC:       {company: "Oil and Natural Gas Corporation", sector: Energy}
+  NTPC:       {company: "NTPC", sector: Energy}
+  POWERGRID:  {company: "Power Grid Corporation of India", sector: Energy}
+  COALINDIA:  {company: "Coal India", sector: Energy}
+  BPCL:       {company: "Bharat Petroleum", sector: Energy}
+  IOC:        {company: "Indian Oil Corporation", sector: Energy}
+  GAIL:       {company: "GAIL (India)", sector: Energy}
+  TATAMOTORS: {company: "Tata Motors", sector: Automobile}
+  M&M:        {company: "Mahindra & Mahindra", sector: Automobile}
+  BAJAJ-AUTO: {company: "Bajaj Auto", sector: Automobile}
+  HEROMOTOCO: {company: "Hero MotoCorp", sector: Automobile}
+  EICHERMOT:  {company: "Eicher Motors", sector: Automobile}
+  DRREDDY:    {company: "Dr. Reddy's Laboratories", sector: Pharma}
+  CIPLA:      {company: "Cipla", sector: Pharma}
+  TATASTEEL:  {company: "Tata Steel", sector: Metals}
+  JSWSTEEL:   {company: "JSW Steel", sector: Metals}
+  HINDALCO:   {company: "Hindalco Industries", sector: Metals}
+  VEDL:       {company: "Vedanta", sector: Metals}
+  ULTRACEMCO: {company: "UltraTech Cement", sector: Infrastructure}
+  GRASIM:     {company: "Grasim Industries", sector: Infrastructure}
+  ADANIPORTS: {company: "Adani Ports and SEZ", sector: Infrastructure}
+  NESTLEIND:  {company: "Nestle India", sector: FMCG}
+  BRITANNIA:  {company: "Britannia Industries", sector: FMCG}
+  INDUSINDBK: {company: "IndusInd Bank", sector: Financial Services}
+  YESBANK:    {company: "Yes Bank", sector: Financial Services}
