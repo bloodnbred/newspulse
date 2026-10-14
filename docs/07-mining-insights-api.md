@@ -1,6 +1,16 @@
 # Phases V5 and V6: mining v2, insights, API v2
 
-Reuse: v1 `mining/` module layout, `reports/mining/*.json` outputs, the `inference/` templates and the v1 API router style. Add modules; keep v1 results.
+> **Reconciled with this repo (Phase P0).** Corrections to the original pack text:
+> - The OLS market model is fitted with `numpy.polyfit` / `scipy.stats.linregress`. **`statsmodels` is not installed and is not required**; do not add it.
+> - `joblib` is available transitively via scikit-learn and is fine for `models/`. It is not in `requirements.txt`; do not add it as a new dependency.
+> - v1 has no router package. `dwm/api/app.py` is a single FastAPI app with its query layer in `dwm/api/store.py`. Add new endpoints there or in a new `dwm/api/routers/` package; do not restructure the existing ones.
+> - v1 mining writes one `reports/mining.json`, not `reports/mining/*.json`. v2 may add `reports/mining/*.json` for the new research questions; keep the v1 file where it is.
+> - Returns in every formula below are **percentage points** (`fact_stock_daily.return_pct`, `fact_market_daily.return_pct`). Beta and abnormal returns are unitless ratios and are unaffected.
+> - There is no v1 headline checker endpoint to "reuse": the v1 checker is the sensationalism scorer in `dwm/features/scoring.py`, exposed through the API's facts/report endpoints. Build `/check` on that scorer.
+>
+> **Do not run the direction model until V5's other modules exist.** If the test accuracy lands at or below either baseline, report that plainly. Do not tune until it looks good (AGENTS.md rule 11).
+
+Reuse: v1 `mining/` module layout, the inference templates and the v1 API style. Add modules; keep v1 results.
 
 ## V5: Mining v2
 Fixed seed, results to `mining_*` tables and `reports/mining/*.json`.

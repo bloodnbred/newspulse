@@ -8,7 +8,12 @@ NewsPulse Nifty: a Data Warehousing and Mining decision-support system. It combi
 ## Stack
 Python 3.11+, DuckDB, pandas, numpy, pyarrow, scikit-learn, mlxtend, scipy, vaderSentiment, PyYAML, Typer, FastAPI, uvicorn, httpx, altair, pytest, ruff. Environment: Windows. Use `pathlib`, no Makefile, run everything as `python -m dwm <command>`.
 
-**Deliberately NOT in the stack:** Streamlit, plotly, requests, yfinance, statsmodels, joblib. See "Corrections to the v2 pack" below. Add a dependency only by editing `requirements.txt` in its own commit with a stated reason.
+**Dependency discipline.** Everything in that list is declared in `requirements.txt`. Three things the pack asked for are **not** dependencies and must not become ones:
+- **`streamlit` and `plotly`** — not used. See "Corrections to the v2 pack". (`streamlit` happens to be present in `.venv`; ignore it. It is not declared and the app does not use it.)
+- **`statsmodels`** — not needed. Fit the event-study OLS with `numpy.polyfit` or `scipy.stats.linregress`.
+- **`yfinance`** — not needed. Fetch with stdlib `urllib` (see below).
+
+`joblib` and `requests` are present in `.venv` but only transitively. `joblib` arrives with scikit-learn and is fine for `models/`; do not add it to `requirements.txt`. To add any genuine new dependency, edit `requirements.txt` in its own commit with a stated reason.
 
 ## Layout (this repo, as it actually is)
 ```
