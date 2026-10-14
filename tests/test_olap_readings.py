@@ -365,16 +365,11 @@ def test_a_chart_never_mixes_incommensurable_measures(results) -> None:
         spec = result.get("chart") or {}
         if not spec or spec.get("dwm_reason"):
             continue
-        layer = spec.get("layer", [spec])
-        series = [
-            m for item in layer if "mark" in item
-            for m in [item.get("y", {})] if isinstance(m, dict)
-        ]
         # Collect the y fields actually plotted.
         plotted = re.findall(r'"field":\s*"([a-z_]+)"[^{}]*?"type":\s*"quantitative"',
                              json.dumps(spec))
         plotted = [p for p in set(plotted) if p in result["rows"][0]]
-        numeric_rows = [r for r in result["rows"][:200]]
+        numeric_rows = result["rows"][:200]
         maxima = []
         for column in plotted:
             values = [

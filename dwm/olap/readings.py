@@ -243,7 +243,6 @@ def _reading_slice_year(rows, profile, params) -> str:
         return f"{len(rows)} rows returned, but no topic or headline column to summarise."
     total = sum(v for _, v in ranked) or 1.0
     lead, second = ranked[0], ranked[1] if len(ranked) > 1 else None
-    group = profile["label"]
     text = (
         f"{len(ranked)} topics, {_n(int(total))} headlines between them. "
         f"{lead[0]} leads with {_n(int(lead[1]))}, {_pct(lead[1] / total)} of the result."

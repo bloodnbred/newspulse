@@ -116,7 +116,7 @@ not have (`reports/facts.json`, i.e. `python -m dwm report`) or a running API on
 
 **Corpus coverage** (queries against `fact_headline` / `fact_market_daily`):
 
-- Headlines: 2001-01-01 → **2020-06-30**. The 5-year window is therefore **2015-07-01 → 2020-06-30**, containing **1,113,427** headlines.
+- Headlines: 2001-01-01 → **2020-06-30**. The window is therefore **2015-06-30 → 2020-06-30**, containing **1,113,427** headlines. **2,041,489** out-of-window headlines stay in the warehouse and remain queryable (`in_window` is a flag, not a filter).
 - Nifty 50 index: 2008-01-21 → 2023-01-24. It runs **7 months past the end of the news**. Drill-across must clip to the news window or it will silently show "no news" months.
 - `dim_date` spans 2001-01-01 → 2023-01-24 with **8,059** dates of which **3,718** are trading days. `dim_trading_calendar` can be built directly from this; the calendar gap problem is already solved by v1.
 
@@ -177,7 +177,7 @@ Stock prices and the constituent list are **fetched**, not supplied:
   Company Name / Industry / Symbol / Series / ISIN Code.
   - **It is the current (2026) list applied to a 2015-2020 window. That is survivorship bias**
     and must be stated on the Data and Schema page and in the report.
-  - 7 constituents start trading after 2015-07-01 and so have partial coverage:
+  - 7 constituents start trading after 2015-06-30 and so have partial coverage:
     BSE, HDFCLIFE, SBILIFE, INDIGO, MAXHEALTH, JIOFIN, ETERNAL.
   - **ETERNAL has no prices at all** (`ETERNAL.NS` → HTTP 400, former ticker `ZOMATO.NS` → 404).
     It goes to `etl_audit` as unmatched. It is not a reason to substitute a different source.
@@ -234,13 +234,20 @@ Recorded here because they change what the pack told later phases to build.
 
 ## 9. Open items and risks
 
+Decided on 2026-10-14 after reviewing this audit:
+
+| # | Item | Decision |
+|---|---|---|
+| 1 | 7 pre-existing `ruff` errors in `dwm/inference/plain.py`, `dwm/olap/readings.py`, `tests/test_olap_readings.py`. | **Fixed** in a standalone housekeeping commit. All were provably dead code; regenerating `report.md` after the fix changed only the `generated_at` timestamp and not one figure or sentence. `ruff check` is now clean, so the definition of done is reachable. |
+| 2 | Sector mapping for 10 unmapped NSE industry labels. | **Mechanical map plus documented per-symbol overrides.** All 15 labels map into the 10 target sectors; where NSE plainly files a company wrongly (ASIANPAINT under "Consumer Durables") an explicit override in config wins, and every override is logged and shown on the Data and Schema page. |
+| 3 | ETERNAL has no price data (`ETERNAL.NS` → 400, `ZOMATO.NS` → 404). | **Keep as a logged unmatched row.** `dim_stock` carries it with its sector and an explicit "no price data" marker. It appears in stock lists and sector news counts rather than silently vanishing from a 50-stock index. Logged in `etl_audit`. |
+
+Still open for V1 to execute against the decisions above:
+
 | # | Item | Status |
 |---|---|---|
-| 1 | 7 pre-existing `ruff` errors in `dwm/inference/plain.py`, `dwm/olap/readings.py`, `tests/test_olap_readings.py` (unused locals, one nested `if`). | Reported, not fixed — AGENTS.md rule 9 forbids cross-phase fixes. They make "ruff clean" in the definition of done unreachable until someone owns them. **Needs a decision.** |
-| 2 | Sector mapping for 10 unmapped NSE industry labels. | V1 decision, must be explicit |
-| 3 | ETERNAL has no price data. | Permanent gap; report it |
 | 4 | Survivorship bias from using the 2026 constituent list. | Must be stated on-page, not just in docs |
-| 5 | `turnover` would be derived, not exchange-reported. | Must be labelled wherever shown |
+| 5 | `turnover` would be derived (`close × volume`), not exchange-reported. | Must be labelled wherever shown |
 | 6 | Nifty index extends 7 months beyond the news corpus. | Clip drill-across to the news window |
 | 7 | Stock-level mentions in TOI may be too sparse to link. | Blueprint §9 fallback: lean on sector-level news; report coverage |
 

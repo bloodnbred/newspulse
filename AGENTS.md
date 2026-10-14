@@ -76,7 +76,7 @@ pytest
 1. **Never fabricate data.** No invented headlines, labels, prices, tickers or mentions. Only `tests/fixtures/` may contain fake rows, clearly marked; they never reach reports or the dashboard.
 2. **Every number shown to users comes from a query or a computed model result.** No hard-coded statistics.
 3. **Wording:** "risk-signal rate", never "fake news rate" for unlabelled headlines. "coincides with" for events, "associated with" for correlations, never "caused" or "predicts" unless a held-out test shows predictive skill over the baseline.
-4. **Window computed from data** (`max(publish_date)` of toi). Never hard-code years. The current corpus ends 2020-06-30, so the 5-year window is 2015-07-01..2020-06-30.
+4. **Window computed from data** (`max(publish_date)` of toi). Never hard-code years. The current corpus ends 2020-06-30, so the window is 2015-06-30..2020-06-30 (1,113,427 headlines in window, 2,041,489 out).
 5. **No raw data, DuckDB file, models, secrets, `.env` in git.**
 6. **Chunked reads** for big files. Aggregate in DuckDB SQL, not pandas loops.
 7. **Idempotent** commands. **Deterministic**: `SEED = 42`.

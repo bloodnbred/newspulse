@@ -150,7 +150,6 @@ def build_summary(facts: dict[str, Any]) -> dict[str, Any]:
     Built as a flat list of six so the overview can show them as cards. Every
     figure is read from `facts`, so this cannot drift from the results.
     """
-    corpus = (facts.get("corpus") or {}).get("analysis_window", {})
     rq2 = facts["rq2_bursts"]
     rq3 = facts["rq3_sensationalism"]
     rq4 = facts["rq4_clusters"]
@@ -160,7 +159,6 @@ def build_summary(facts: dict[str, Any]) -> dict[str, Any]:
 
     metrics = rq7.get("metrics") or {}
     strongest = ((rq6.get("volatility") or {}).get("strongest")) or {}
-    accounting = rq6.get("significance_accounting") or {}
     clusters = rq4.get("clusters") or []
     ranked = rq3.get("ranked") or []
     top = ranked[0] if ranked else {}
@@ -223,8 +221,6 @@ def build_summary(facts: dict[str, Any]) -> dict[str, Any]:
     place = next((t for t in topics if t.get("topic_group") == "Place"), None)
     subject = next((t for t in topics if t.get("topic_group") == "Subject"), None)
     artefacts = (facts.get("rq1_topic_mix") or {}).get("taxonomy_artefacts") or []
-    moves = (facts.get("rq1_topic_mix") or {}).get("largest_moves") or []
-    biggest = moves[0] if moves else None
     if place:
         artefact = artefacts[0] if artefacts else None
         items.append({
@@ -631,9 +627,8 @@ def gloss_terms(terms: list[str]) -> dict[str, Any]:
     raw = [str(t) for t in terms]
     found: list[str] = []
     for label, needles in _PATTERNS:
-        if any(n in raw for n in needles):
-            if label not in found:
-                found.append(label)
+        if any(n in raw for n in needles) and label not in found:
+            found.append(label)
     # Currency is checked separately because several terms can map to it and it
     # is the most commonly hit group.
     currency = next(
