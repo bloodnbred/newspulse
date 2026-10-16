@@ -139,6 +139,10 @@ def ingest(
                 "rows_read": o.staging.get("rows_read"),
                 "rows_loaded": o.staging.get("rows_loaded"),
                 "rows_rejected": o.staging.get("rows_rejected"),
+                # v1 datasets never populate these; v2 stocks reports which
+                # index members had no usable price history, and hiding that
+                # would make a 47-stock index look like a 50-stock one.
+                "unmatched": o.staging.get("unmatched"),
                 "error": o.error,
             }
             for o in outcomes

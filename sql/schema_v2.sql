@@ -32,9 +32,17 @@ CREATE TABLE IF NOT EXISTS dim_stock (
   in_nifty50      BOOLEAN,
   first_trade_date DATE,
   last_trade_date  DATE,
-  sector_source   VARCHAR,          -- 'meta' | 'config' | 'unknown'
-  price_source    VARCHAR,          -- 'yahoo_chart_api' | 'cache'
-  is_survivor     BOOLEAN           -- FALSE when the stock only lists after the window starts
+  sector_source   VARCHAR,          -- 'override' | 'config' | 'meta' | 'unknown'
+                                   -- 'override' = config/stocks.yaml `overrides`
+                                   --   won over the provider's own industry label
+                                   -- 'config'   = per-symbol fallback in stocks.yaml
+                                   -- 'meta'     = mapped from the NSE industry label
+                                   -- 'unknown'  = no sector could be assigned; reported,
+                                   --   never guessed
+  price_source    VARCHAR,          -- 'yahoo_chart_api' | NULL when no prices
+  is_survivor     BOOLEAN           -- FALSE when the stock first trades after the
+                                   -- window starts, i.e. it is in the index today
+                                   -- but was not there when the news was published
 );
 
 -- Alias -> stock. One row per spelling a headline might use.

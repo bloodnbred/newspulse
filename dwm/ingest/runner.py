@@ -103,16 +103,121 @@ def ingest_one(
         con.close()
 
 
+V2_DATASETS = ("meta", "stocks")
+
+
+def ingest_v2(
+    settings: Settings,
+    *,
+    datasets: list[str],
+    force_download: bool = False,
+    skip_fetch: bool = False,
+) -> dict[str, Any]:
+    """Ingest the v2 sources (stocks, meta) through their own loaders.
+
+    They are not v1 DatasetSpecs: `stocks` is a per-symbol glob rather than one
+    file at one URL, so they cannot go through ingest_one. They share the same
+    connection, the same etl_audit table and the same staged-table convention.
+    """
+    from dwm.config import load_sources_config
+    from dwm.ingest import meta as meta_ingest
+    from dwm.ingest import stocks as stocks_ingest
+
+    specs = load_sources_config()
+    unknown = [d for d in datasets if d not in V2_DATASETS]
+    if unknown:
+        raise KeyError(f"unknown v2 dataset(s) {unknown}; known: {list(V2_DATASETS)}")
+
+    con = connect(settings)
+    results: dict[str, Any] = {}
+    try:
+        # meta first: stocks reads its symbol list out of stg_meta.
+        if "meta" in datasets:
+            results["meta"] = _as_dict(
+                meta_ingest.ingest(
+                    con, specs.get("meta"),
+                    force=force_download, skip_fetch=skip_fetch,
+                )
+            )
+        if "stocks" in datasets:
+            results["stocks"] = _as_dict(
+                stocks_ingest.ingest(
+                    con, settings, specs.get("stocks"),
+                    force=force_download, skip_fetch=skip_fetch,
+                )
+            )
+    finally:
+        con.close()
+    return results
+
+
+def _as_dict(outcome: Any) -> dict[str, Any]:
+    """Flatten a v2 outcome dataclass into something JSON-printable."""
+    payload: dict[str, Any] = {}
+    for field_ in outcome.__dataclass_fields__:
+        value = getattr(outcome, field_)
+        if isinstance(value, Path):
+            value = str(value)
+        elif isinstance(value, list):
+            value = [dict(v) if isinstance(v, dict) else str(v) for v in value]
+        payload[field_] = value
+    return payload
+
+
+def _as_outcome(code: str, payload: dict[str, Any]) -> IngestOutcome:
+    """Present a v2 result in the same shape as a v1 one.
+
+    The CLI prints table / rows_read / rows_loaded from `staging`, so a v2
+    outcome that does not use those key names makes `python -m dwm ingest
+    --dataset stocks` print a row of nulls and look like it had done nothing.
+    """
+    staging = dict(payload.get("staging") or {})
+    audit_id = payload.get("audit_id")
+    info = {k: v for k, v in staging.items() if k != "status"}
+    info.setdefault("table", f"stg_{code}")
+    if "rows_loaded" not in info and payload.get("rows") is not None:
+        info["rows_loaded"] = payload["rows"]
+    info.setdefault("rows_read", info.get("rows_loaded", 0))
+    info.setdefault("rows_rejected", 0)
+    if payload.get("unmatched"):
+        info["unmatched"] = payload["unmatched"]
+    return IngestOutcome(
+        code=code,
+        fetch=None,
+        staging=info,
+        audit_ids=[int(audit_id)] if audit_id else [],
+        ok=bool(payload.get("ok", True)),
+        error=payload.get("error"),
+    )
+
+
 def ingest(
     settings: Settings, *, datasets: list[str] | None = None, force_download: bool = False,
     skip_fetch: bool = False,
 ) -> list[IngestOutcome]:
     """Ingest the requested datasets, defaulting to every enabled one."""
     specs = load_datasets_config()
-    wanted = datasets or sorted(specs)
-    unknown = [code for code in wanted if code not in specs]
-    if unknown:
-        raise KeyError(f"unknown dataset(s) {unknown}; known: {sorted(specs)}")
+    v2_results: list[IngestOutcome] = []
+    if datasets is None:
+        wanted = sorted(specs)
+    else:
+        # v2 datasets are routed to their own loader rather than rejected, so
+        # `--dataset all` and `--dataset stocks` behave as documented.
+        wanted = [d for d in datasets if d not in V2_DATASETS]
+        v2_wanted = [d for d in datasets if d in V2_DATASETS]
+        unknown = [d for d in datasets if d not in specs and d not in V2_DATASETS]
+        if unknown:
+            raise KeyError(
+                f"unknown dataset(s) {unknown}; known: {sorted(set(specs) | set(V2_DATASETS))}"
+            )
+        if v2_wanted:
+            v2_results = [
+                _as_outcome(code, payload)
+                for code, payload in ingest_v2(
+                    settings, datasets=v2_wanted,
+                    force_download=force_download, skip_fetch=skip_fetch,
+                ).items()
+            ]
 
     outcomes: list[IngestOutcome] = []
     for code in wanted:
@@ -127,7 +232,7 @@ def ingest(
         if outcome.ok:
             loaded = outcome.staging.get("rows_loaded", 0)
             log.info("%s: staged %s rows", code, human_int(int(loaded)))
-    return outcomes
+    return outcomes + v2_results
 
 
 def load_raw(

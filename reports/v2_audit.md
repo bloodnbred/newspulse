@@ -179,8 +179,12 @@ Stock prices and the constituent list are **fetched**, not supplied:
     and must be stated on the Data and Schema page and in the report.
   - 7 constituents start trading after 2015-06-30 and so have partial coverage:
     BSE, HDFCLIFE, SBILIFE, INDIGO, MAXHEALTH, JIOFIN, ETERNAL.
-  - **ETERNAL has no prices at all** (`ETERNAL.NS` → HTTP 400, former ticker `ZOMATO.NS` → 404).
-    It goes to `etl_audit` as unmatched. It is not a reason to substitute a different source.
+  - **HTTP 400 here means "no bars in the requested range", not "ticker missing".**
+    `ETERNAL`, `JIOFIN` and `MAXHEALTH` all return 400 for 2015-2020 and return
+    daily bars for 2023-2026. They list after the news window, so there is nothing
+    to fetch for the period being studied. `ZOMATO.NS` (Eternal's former ticker) is
+    a genuine 404. The distinction matters: it is the difference between "3 stocks
+    have no history in our period" and "the source is broken", and only the first is true.
 - **Sector mapping will not work as shipped.** `config/datasets_v2.yaml`'s `industry_to_sector`
   maps 5 of the 15 labels NSE actually returns, and its keys are UPPERCASE while the feed is
   Title Case:
@@ -240,7 +244,7 @@ Decided on 2026-10-14 after reviewing this audit:
 |---|---|---|
 | 1 | 7 pre-existing `ruff` errors in `dwm/inference/plain.py`, `dwm/olap/readings.py`, `tests/test_olap_readings.py`. | **Fixed** in a standalone housekeeping commit. All were provably dead code; regenerating `report.md` after the fix changed only the `generated_at` timestamp and not one figure or sentence. `ruff check` is now clean, so the definition of done is reachable. |
 | 2 | Sector mapping for 10 unmapped NSE industry labels. | **Mechanical map plus documented per-symbol overrides.** All 15 labels map into the 10 target sectors; where NSE plainly files a company wrongly (ASIANPAINT under "Consumer Durables") an explicit override in config wins, and every override is logged and shown on the Data and Schema page. |
-| 3 | ETERNAL has no price data (`ETERNAL.NS` → 400, `ZOMATO.NS` → 404). | **Keep as a logged unmatched row.** `dim_stock` carries it with its sector and an explicit "no price data" marker. It appears in stock lists and sector news counts rather than silently vanishing from a 50-stock index. Logged in `etl_audit`. |
+| 3 | ETERNAL appears to have no price data (`ETERNAL.NS` → 400, `ZOMATO.NS` → 404). | **Keep as a logged unmatched row.** `dim_stock` carries it with its sector and `price_source = NULL`. It appears in stock lists and sector counts rather than silently vanishing from a 50-stock index. Logged in `etl_audit`. *Corrected during V1:* the 400 means "listed after the window", not "broken ticker" — ETERNAL, JIOFIN and MAXHEALTH all return bars for 2023-2026. |
 
 Still open for V1 to execute against the decisions above:
 

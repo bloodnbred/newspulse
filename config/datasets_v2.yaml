@@ -5,16 +5,26 @@ stocks:
   file_glob: "data/raw/stocks/*.csv*"
   symbol_from: filename            # filename stem is the symbol if there is no symbol column
   date_format: null                # auto-detect
+  numeric_columns: [open, high, low, close, adj_close, volume]
+  url_template: "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?period1={start}&period2={end}&interval=1d&events=div%2Csplit"
+  ticker_suffix: ".NS"             # NSE symbols on the Yahoo board carry .NS
   columns:
     date: [date]
     open: [open]
     high: [high]
     low: [low]
-    close: [close, close price]
+    close: [close]
+    adj_close: [adj close, adj_close, adjclose]
     volume: [volume]
     turnover: [turnover]
     symbol: [symbol]
   limitation: "Prices are not adjusted for splits/bonus unless the source says so. Constituents changed over time."
+  # Returns are computed from adj_close, not close. On this source `close` is
+  # split-adjusted but NOT dividend-adjusted (ITC 2020-07: close 199.85 vs
+  # adjclose 147.14), so close alone silently understates total return.
+  # `turnover` is not published by this source at all; anything derived from it
+  # must be labelled derived.
+  notes: "close is split-adjusted but not dividend-adjusted; returns use adj_close"
 
 meta:
   code: meta
@@ -25,20 +35,43 @@ meta:
     company: [company name, company, name]
     industry: [industry, sector]
     isin: [isin, isin code]
-  industry_to_sector:             # map the source's industry labels to our 10 sectors (extend after viewing real labels)
-    "FINANCIAL SERVICES": Financial Services
-    "BANKING": Financial Services
+  industry_to_sector:
+    # --- the 15 labels NSE actually returns, with constituent counts ---
+    "Financial Services": Financial Services        # 12
+    "Healthcare": Pharma                             #  5
+    "Automobile and Auto Components": Automobile     #  5
+    "Metals & Mining": Metals                        #  4
+    "Information Technology": IT                      #  4
+    "Fast Moving Consumer Goods": FMCG                #  4
+    "Oil Gas & Consumable Fuels": Energy             #  3
+    "Services": Infrastructure                       #  2  <- judgement
+    "Consumer Durables": Consumer                    #  2  <- see overrides
+    "Consumer Services": Consumer                    #  2  <- judgement
+    "Construction Materials": Infrastructure          #  2
+    "Power": Energy                                  #  2
+    "Capital Goods": Infrastructure                  #  1  <- judgement
+    "Telecommunication": Telecom                     #  1
+    "Construction": Infrastructure                   #  1
+    # --- generic labels kept as fallbacks for other feeds ---
+    "Banking": Financial Services
     "IT": IT
-    "INFORMATION TECHNOLOGY": IT
-    "AUTOMOBILE": Automobile
-    "PHARMA": Pharma
-    "OIL & GAS": Energy
-    "ENERGY": Energy
-    "POWER": Energy
+    "Automobile": Automobile
+    "Pharma": Pharma
+    "Oil & Gas": Energy
+    "Energy": Energy
     "FMCG": FMCG
-    "METALS": Metals
-    "CEMENT & CEMENT PRODUCTS": Infrastructure
-    "CONSTRUCTION": Infrastructure
-    "TELECOM": Telecom
-    "CONSUMER GOODS": Consumer
-  fallback: "config/stocks.yaml"   # used when meta file is missing or an industry is unmapped
+    "Metals": Metals
+    "Cement & Cement Products": Infrastructure
+    "Telecom": Telecom
+    "Consumer Goods": Consumer
+  fallback: "config/stocks.yaml"   # per-symbol entries there win over this map
+
+# Matching is case-insensitive (config.py lowercases both sides). Where a label
+# had no exact home among the ten sectors the judgement is written down rather
+# than defaulted silently:
+#   Services          -> Infrastructure  (Adani Ports, Indigo: logistics and
+#                        aviation; capital-intensive, not consumer-facing)
+#   Capital Goods     -> Infrastructure  (BEL, defence equipment; the closest
+#                        of the ten)
+#   Consumer Services -> Consumer       (Eternal, Trent: retail and food delivery)
+# ASIANPAINT is overridden rather than mapped; see config/stocks.yaml `overrides`.

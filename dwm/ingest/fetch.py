@@ -11,11 +11,13 @@ Design constraints from the blueprint:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dwm.config import DatasetSpec, ensure_dirs, raw_dir
@@ -191,3 +193,55 @@ def fetch_dataset(
 def free_space_mb(directory: Path) -> float:
     usage = shutil.disk_usage(directory)
     return usage.free / 1_048_576
+
+
+# ---------------------------------------------------------------------------
+# v2: small API responses and provenance sidecars
+# ---------------------------------------------------------------------------
+
+
+def fetch_bytes(url: str, timeout: int = 30, *, accept: str = "*/*") -> bytes:
+    """GET a small resource into memory.
+
+    For the v2 JSON and CSV endpoints, which return a few hundred KB at most and
+    have no resume semantics worth having. Deliberately not routed through
+    fetch_dataset, which streams a large CSV to disk with Range resumption and
+    would leave a .part file behind for a 40 KB reply.
+    """
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def provenance_path(target: Path) -> Path:
+    """The `.source.json` sidecar that sits beside a cached file."""
+    return target.with_name(target.name + ".source.json")
+
+
+def write_provenance(target: Path, payload: dict[str, object]) -> Path:
+    """Record where a cached file came from (AGENTS.md rule 22).
+
+    Written after the data file, and never inside it, so a corrupt cache can be
+    diagnosed without trusting the cache. Includes the sha256 of the file so a
+    later run can tell whether the cache was edited by hand.
+    """
+    record = dict(payload)
+    record["fetched_at"] = datetime.now(UTC).isoformat()
+    if target.exists():
+        record["bytes"] = target.stat().st_size
+        record["sha256"] = sha256_file(target)
+    path = provenance_path(target)
+    path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def read_provenance(target: Path) -> dict[str, object] | None:
+    """Read the sidecar for a cached file, or None when it has never been fetched."""
+    path = provenance_path(target)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        log.warning("%s: unreadable provenance sidecar, ignoring it", path.name)
+        return None

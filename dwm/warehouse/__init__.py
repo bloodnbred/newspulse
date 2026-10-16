@@ -52,6 +52,11 @@ def run_build(settings: Settings, *, con: duckdb.DuckDBPyConnection | None = Non
         with step("build cubes"):
             cubes = build_cubes(con)
 
+        # v2 dimensions. Skipped with a warning when their staging tables are
+        # absent, so a v1-only run (the default `python -m dwm build`) behaves
+        # exactly as it did before v2 rather than failing on a missing dataset.
+        stock_dims = _build_v2_dims(con)
+
         gates = check_gates(con, strict=False)
         for name, n in facts.items():
             log.info("%s: %s rows", name, human_int(n))
@@ -59,11 +64,45 @@ def run_build(settings: Settings, *, con: duckdb.DuckDBPyConnection | None = Non
             "run_id": run_id,
             "facts": facts,
             "cubes": cubes,
+            "stock_dims": stock_dims,
             "gates": gates,
         }
     finally:
         if owned:
             con.close()
+
+
+def _build_v2_dims(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
+    """Build the v2 dimensions and the trading calendar, if their inputs exist."""
+    from dwm.config import load_events, load_sector_config, load_stock_aliases
+    from dwm.etl import calendar as calendar_mod
+    from dwm.etl import dims as dims_mod
+
+    present = {
+        r[0] for r in con.execute("SELECT table_name FROM information_schema.tables").fetchall()
+    }
+    if not ({"stg_meta", "stg_stocks"} & present):
+        log.info(
+            "v2 dimensions skipped: run `python -m dwm ingest --dataset stocks --dataset meta` first"
+        )
+        return {"built": False}
+
+    window = calendar_mod.window_bounds(con)
+    result: dict[str, Any] = {"built": True, "window": list(window)}
+
+    with step("build trading calendar"):
+        result["calendar"] = calendar_mod.build(con)
+
+    with step("build v2 dimensions"):
+        result["dims"] = dims_mod.build_stock_dims(
+            con,
+            sector_cfg=load_sector_config(),
+            alias_rules=load_stock_aliases(),
+            events=load_events(),
+            window=window,
+        )
+    result["calendar_check"] = calendar_mod.check(con)
+    return result
 
 
 def _scalar(con: duckdb.DuckDBPyConnection, sql: str) -> int:

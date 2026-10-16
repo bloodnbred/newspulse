@@ -1,6 +1,21 @@
 # Sector fallback and master list. Verify against the symbols in YOUR downloaded data.
 # Constituents of the Nifty 50 changed between 2015 and 2020; stocks not in your data are ignored.
 sectors: [Financial Services, IT, Automobile, Pharma, Energy, FMCG, Metals, Infrastructure, Telecom, Consumer]
+
+# Symbols where the NSE industry label is not the right answer. These WIN over
+# both the industry_to_sector map and the `stocks` block below, and
+# dim_stock.sector_source records that an override was applied.
+overrides:
+  # NSE files Asian Paints under "Consumer Durables". It makes paints and
+  # coatings, which is construction material, and it is filed alongside Titan
+  # (a watchmaker) purely by NSE's own bucketing. Moving it to Infrastructure
+  # keeps a paint maker from being read as a consumer-goods company.
+  ASIANPAINT: {company: "Asian Paints", sector: Infrastructure,
+               reason: "NSE files it as Consumer Durables; it makes paints and coatings"}
+
+# Per-symbol fallback used when the meta file is missing, or when a symbol's
+# industry label does not appear in industry_to_sector. Entries here are
+# sector_source='config'; industry-derived ones are sector_source='meta'.
 stocks:
   RELIANCE:   {company: "Reliance Industries", sector: Energy}
   TCS:        {company: "Tata Consultancy Services", sector: IT}

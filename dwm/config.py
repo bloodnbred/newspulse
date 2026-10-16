@@ -22,6 +22,14 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 DATASETS_YAML = CONFIG_DIR / "datasets.yaml"
 TOPICS_YAML = CONFIG_DIR / "topics.yaml"
 
+# v2 sources. Kept apart from DATASETS_YAML so that load_datasets_config()
+# still returns exactly the three v1 datasets, which tests/test_config.py pins.
+DATASETS_V2_YAML = CONFIG_DIR / "datasets_v2.yaml"
+STOCKS_YAML = CONFIG_DIR / "stocks.yaml"
+EVENTS_V2_YAML = CONFIG_DIR / "events_v2.yaml"
+STOCK_ALIASES_YAML = CONFIG_DIR / "stock_aliases.yaml"
+SECTOR_KEYWORDS_YAML = CONFIG_DIR / "sector_keywords.yaml"
+
 DEFAULT_DB_NAME = "dwm.duckdb"
 
 
@@ -287,6 +295,308 @@ def get_dataset(code: str, path: Path | None = None) -> DatasetSpec:
 
 def enabled_datasets(path: Path | None = None) -> list[DatasetSpec]:
     return [s for s in load_datasets_config(path).values() if s.enabled]
+
+
+# ---------------------------------------------------------------------------
+# v2 source config
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class SourceSpec:
+    """One v2 source, as declared in config/datasets_v2.yaml.
+
+    Not a DatasetSpec: a v2 source is not always one file at one URL. `stocks`
+    is a glob of one CSV per symbol fetched from a per-symbol URL template, and
+    `meta` is a single CSV. Kept as its own type so load_datasets_config() and
+    everything built on it stay exactly as v1 declared them.
+    """
+
+    code: str
+    name: str
+    raw: dict[str, Any]
+    enabled: bool = True
+
+    @property
+    def url(self) -> str:
+        return str(self.raw.get("url") or "")
+
+    @property
+    def filename(self) -> str:
+        return str(self.raw.get("filename") or "")
+
+    @property
+    def file_glob(self) -> str:
+        return str(self.raw.get("file_glob") or "")
+
+    @property
+    def columns(self) -> dict[str, list[str]]:
+        cols = self.raw.get("columns") or {}
+        out: dict[str, list[str]] = {}
+        for key, value in cols.items():
+            out[str(key)] = [value] if isinstance(value, str) else list(value)
+        return out
+
+    @property
+    def numeric_columns(self) -> list[str]:
+        declared = self.raw.get("numeric_columns")
+        if declared:
+            return [declared] if isinstance(declared, str) else list(declared)
+        # Fall back to the OHLCV-style set when the config lists none, since
+        # every price-shaped source needs exactly these.
+        return [k for k in ("open", "high", "low", "close", "volume", "turnover")
+                if k in self.columns]
+
+    @property
+    def symbol_from(self) -> str:
+        return str(self.raw.get("symbol_from") or "")
+
+    @property
+    def url_template(self) -> str:
+        return str(self.raw.get("url_template") or "")
+
+    @property
+    def ticker_suffix(self) -> str:
+        return str(self.raw.get("ticker_suffix") or "")
+
+    @property
+    def notes(self) -> str:
+        return " ".join(str(self.raw.get("notes") or "").split())
+
+    @property
+    def industry_to_sector(self) -> dict[str, str]:
+        return {str(k).strip().lower(): str(v)
+                for k, v in (self.raw.get("industry_to_sector") or {}).items()}
+
+    @property
+    def limitation(self) -> str:
+        return " ".join(str(self.raw.get("limitation") or "").split())
+
+    @property
+    def citation(self) -> str:
+        return " ".join(str(self.raw.get("citation") or "").split())
+
+    @property
+    def license(self) -> str:
+        return str(self.raw.get("license") or "unknown")
+
+    @property
+    def encoding(self) -> str:
+        return str(self.raw.get("encoding") or "utf-8")
+
+    def alias_list(self, logical: str) -> list[str]:
+        return self.columns.get(logical) or [logical]
+
+    def local_dir(self) -> Path:
+        return raw_dir(self.code)
+
+
+def load_sources_config(path: Path | None = None) -> dict[str, SourceSpec]:
+    """Load config/datasets_v2.yaml into SourceSpec objects."""
+    path = path or DATASETS_V2_YAML
+    if not path.exists():
+        raise FileNotFoundError(f"missing v2 dataset config: {path}")
+    with path.open(encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh) or {}
+    if not doc:
+        raise ValueError(f"{path} declares no sources")
+    specs: dict[str, SourceSpec] = {}
+    for code, body in doc.items():
+        body = body or {}
+        if not body.get("name"):
+            raise ValueError(f"source '{code}' in {path} is missing 'name'")
+        specs[str(code)] = SourceSpec(
+            code=str(code), name=str(body["name"]), raw=body,
+            enabled=bool(body.get("enabled", True)),
+        )
+    return specs
+
+
+# ---------------------------------------------------------------------------
+# v2 stock / sector / event / alias config
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class SectorConfig:
+    """config/stocks.yaml: the ten sectors, per-symbol fallbacks, overrides.
+
+    `overrides` is the honest part. NSE's industry labels are the primary source
+    but they are not always right (Asian Paints is filed under "Consumer
+    Durables", which is not what it makes), so a symbol listed here wins over
+    the label-derived sector and `sector_source` records that it did.
+    """
+
+    sectors: list[str] = field(default_factory=list)
+    stocks: dict[str, dict[str, str]] = field(default_factory=dict)
+    overrides: dict[str, dict[str, str]] = field(default_factory=dict)
+    industry_to_sector: dict[str, str] = field(default_factory=dict)
+    fallback_file: str = ""
+
+    def sector_for_label(self, industry: str | None) -> str | None:
+        if not industry:
+            return None
+        return self.industry_to_sector.get(str(industry).strip().lower())
+
+
+@dataclass(slots=True)
+class StockEntry:
+    company: str
+    sector: str
+    source: str          # 'meta' | 'config' | 'override' | 'unknown'
+    industry: str | None = None
+
+
+def load_sector_config(
+    path: Path | None = None, sources: dict[str, SourceSpec] | None = None
+) -> SectorConfig:
+    """Merge config/stocks.yaml with the industry_to_sector map from v2 config.
+
+    Precedence, highest first:
+      1. `overrides` in stocks.yaml   - a symbol NSE files wrongly
+      2. `stocks` in stocks.yaml      - the pack's own per-symbol assignment
+      3. `industry_to_sector`         - mechanical map of the feed's label
+      4. nothing                      - recorded as sector_source='unknown'
+    """
+    path = path or STOCKS_YAML
+    if not path.exists():
+        raise FileNotFoundError(f"missing stock config: {path}")
+    with path.open(encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh) or {}
+
+    sectors = [str(s) for s in (doc.get("sectors") or [])]
+    if not sectors:
+        raise ValueError(f"{path} declares no sectors")
+
+    def entries(block: Any) -> dict[str, dict[str, str]]:
+        out: dict[str, dict[str, str]] = {}
+        for symbol, body in (block or {}).items():
+            body = body or {}
+            out[str(symbol).strip().upper()] = {
+                str(k): str(v) for k, v in body.items() if v is not None
+            }
+        return out
+
+    stocks = entries(doc.get("stocks"))
+    overrides = entries(doc.get("overrides"))
+    for symbol, body in overrides.items():
+        # An override must not invent a sector outside the declared list.
+        sector = body.get("sector")
+        if sector and sector not in sectors:
+            raise ValueError(
+                f"{path}: override for {symbol} names sector {sector!r}, "
+                f"which is not in sectors {sectors}"
+            )
+
+    industry_map: dict[str, str] = {}
+    for spec in (sources or load_sources_config()).values():
+        industry_map.update(spec.industry_to_sector)
+
+    return SectorConfig(
+        sectors=sectors,
+        stocks=stocks,
+        overrides=overrides,
+        industry_to_sector=industry_map,
+        fallback_file=path.name,
+    )
+
+
+def resolve_sector(symbol: str, industry: str | None, cfg: SectorConfig) -> StockEntry:
+    """Resolve one symbol to a company and sector, recording where it came from."""
+    symbol = symbol.strip().upper()
+    override = cfg.overrides.get(symbol)
+    if override:
+        return StockEntry(
+            company=override.get("company", ""), sector=override["sector"],
+            source="override", industry=industry,
+        )
+    configured = cfg.stocks.get(symbol)
+    if configured:
+        return StockEntry(
+            company=configured.get("company", ""), sector=configured["sector"],
+            source="config", industry=industry,
+        )
+    mapped = cfg.sector_for_label(industry)
+    if mapped:
+        return StockEntry(company="", sector=mapped, source="meta", industry=industry)
+    return StockEntry(company="", sector="", source="unknown", industry=industry)
+
+
+@dataclass(slots=True)
+class EventEntry:
+    date: date
+    label: str
+    event_type: str
+
+
+def load_events(path: Path | None = None) -> list[EventEntry]:
+    """config/events_v2.yaml -> event list, de-duplicated on (date, label)."""
+    path = path or EVENTS_V2_YAML
+    if not path.exists():
+        raise FileNotFoundError(f"missing event config: {path}")
+    with path.open(encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh) or {}
+    out: dict[tuple[str, str], EventEntry] = {}
+    for body in doc.get("events_v2") or []:
+        body = body or {}
+        raw_date = str(body.get("date") or "")
+        label = str(body.get("label") or "").strip()
+        if not raw_date or not label:
+            continue
+        parsed = date.fromisoformat(raw_date)
+        key = (raw_date, label.casefold())
+        if key in out:
+            continue
+        out[key] = EventEntry(
+            date=parsed, label=label,
+            event_type=str(body.get("type") or "other").strip(),
+        )
+    return sorted(out.values(), key=lambda e: (e.date, e.label))
+
+
+@dataclass(slots=True)
+class AliasRules:
+    """config/stock_aliases.yaml: how headlines spell company names."""
+
+    context_words: list[str] = field(default_factory=list)
+    use_topic_as_context: str = ""
+    aliases: dict[str, dict[str, list[str] | list[str]]] = field(default_factory=dict)
+
+
+def load_stock_aliases(path: Path | None = None) -> AliasRules:
+    path = path or STOCK_ALIASES_YAML
+    if not path.exists():
+        raise FileNotFoundError(f"missing alias config: {path}")
+    with path.open(encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh) or {}
+
+    def strings(value: Any) -> list[str]:
+        if value is None:
+            return []
+        return [value] if isinstance(value, str) else [str(v) for v in value]
+
+    aliases: dict[str, dict[str, list[str]]] = {}
+    for symbol, body in (doc.get("aliases") or {}).items():
+        body = body or {}
+        entry = {
+            "names": strings(body.get("names")),
+            "ambiguous": strings(body.get("ambiguous")),
+            "case_sensitive": strings(body.get("case_sensitive")),
+        }
+        # An alias that is only ever mentioned as a bare ticker is case
+        # sensitive by definition; `ITC` and `HDFC` are ordinary words.
+        for tick in entry["case_sensitive"]:
+            if tick not in entry["names"]:
+                entry["names"].append(tick)
+        for tick in entry["ambiguous"]:
+            if tick not in entry["names"]:
+                entry["names"].append(tick)
+        aliases[str(symbol).strip().upper()] = entry
+    return AliasRules(
+        context_words=[str(w).lower() for w in (doc.get("context_words") or [])],
+        use_topic_as_context=str(doc.get("use_topic_as_context") or ""),
+        aliases=aliases,
+    )
 
 
 # ---------------------------------------------------------------------------

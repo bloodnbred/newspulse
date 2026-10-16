@@ -53,3 +53,35 @@ aliases:
   BRITANNIA:  {names: ["Britannia"], ambiguous: ["Britannia"]}
   INDUSINDBK: {names: ["IndusInd Bank"]}
   YESBANK:    {names: ["Yes Bank"]}
+
+  # --- added for Nifty 50 coverage (Phase V1) ---
+  # The list above covers only 36 of the 50 current constituents. A mention
+  # linker that cannot name 14 stocks in the index silently under-reports
+  # coverage, so every constituent gets an entry.
+  #
+  # `ambiguous` marks an alias that is also an ordinary English word or a very
+  # common acronym. Those only count when a business context word is present
+  # (see context_words) or the headline's topic is Business, otherwise a
+  # sentence about the colour indigo or the word bel would match a company.
+  ADANIENT:   {names: ["Adani Enterprises", "Adani Enterprises Ltd", "Adani"], ambiguous: ["Adani"]}
+  APOLLOHOSP: {names: ["Apollo Hospitals", "Apollo Hospital", "Apollo"], ambiguous: ["Apollo"]}
+  # BEL is an ordinary English word. Case-sensitive and context-gated.
+  BEL:        {names: ["Bharat Electronics", "BEL"], ambiguous: ["BEL"], case_sensitive: ["BEL"]}
+  BSE:        {names: ["BSE Limited", "BSE"], ambiguous: ["BSE"], case_sensitive: ["BSE"]}
+  # Eternal was Zomato until the 2025 rename. The analysis window is 2015-2020,
+  # so headlines in scope say "Zomato", and this row is where they attach.
+  ETERNAL:    {names: ["Eternal", "Zomato"], ambiguous: ["Eternal"], case_sensitive: ["Zomato"]}
+  HDFCLIFE:   {names: ["HDFC Life", "HDFC Life Insurance"], ambiguous: ["HDFC Life"]}
+  INDIGO:     {names: ["InterGlobe Aviation", "IndiGo", "Indigo"], ambiguous: ["Indigo"]}
+  JIOFIN:     {names: ["Jio Financial", "Jio Financial Services"]}
+  MAXHEALTH:  {names: ["Max Healthcare", "Max Health"], ambiguous: ["Max"]}
+  SBILIFE:    {names: ["SBI Life", "SBI Life Insurance"], ambiguous: ["SBI Life"]}
+  SHRIRAMFIN: {names: ["Shriram Finance", "Shriram Financial", "Shriram"], ambiguous: ["Shriram"]}
+  TATACONSUM: {names: ["Tata Consumer Products", "Tata Consumer"]}
+  # Tata Motors demerged in Oct 2025 into TMPV (passenger vehicles) and a CV
+  # listing. The NSE list we fetch is today's, so it names TMPV - but every
+  # headline inside our 2015-2020 window says "Tata Motors", which was the
+  # single company then. Without this alias the window's Tata Motors news links
+  # to nothing, because TATAMOTORS is no longer a member.
+  TMPV:       {names: ["Tata Motors", "Tata Motors Ltd"]}
+  TRENT:      {names: ["Trent", "Trent Ltd"], ambiguous: ["Trent"]}

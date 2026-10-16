@@ -14,9 +14,18 @@ thing in every fact table, which is what makes drill-across possible.
 
 from __future__ import annotations
 
+from typing import Any
+
 import duckdb
 
-from dwm.config import DatasetSpec, TopicMap
+from dwm.config import (
+    AliasRules,
+    DatasetSpec,
+    EventEntry,
+    SectorConfig,
+    TopicMap,
+    resolve_sector,
+)
 from dwm.logging_utils import get, human_int
 
 log = get("dwm.etl.dims")
@@ -193,6 +202,22 @@ def _count(con: duckdb.DuckDBPyConnection, table: str) -> int:
     return int(con.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
 
 
+def _insert_many(
+    con: duckdb.DuckDBPyConnection, sql: str, rows: list[tuple[Any, ...]]
+) -> int:
+    """executemany, but an empty batch is a no-op.
+
+    DuckDB raises InvalidInputException when executemany is handed an empty
+    list, which turns "no events fall inside this window" into a crash instead
+    of an empty table. A dimension that matches nothing is a legitimate state
+    - a narrow window, or a stage that has not run yet - so it stays empty.
+    """
+    if not rows:
+        return 0
+    con.executemany(sql, rows)
+    return len(rows)
+
+
 def _build_dim_date(con: duckdb.DuckDBPyConnection) -> None:
     from dwm.etl.dates import date_key_expr, ifnd_date_value_expr, nifty_date_expr, toi_date_expr
 
@@ -286,3 +311,257 @@ def dim_date_bounds(con: duckdb.DuckDBPyConnection) -> tuple[str, str] | None:
     if not row or row[0] is None:
         return None
     return row[0].isoformat(), row[1].isoformat()
+
+
+# ---------------------------------------------------------------------------
+# v2 dimensions
+# ---------------------------------------------------------------------------
+
+STOCK_DIM_TABLES = (
+    "dim_sector",
+    "dim_stock",
+    "dim_stock_alias",
+    "dim_event",
+)
+
+
+def build_stock_dims(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    sector_cfg: SectorConfig,
+    alias_rules: AliasRules,
+    events: list[EventEntry],
+    window: tuple[str, str],
+) -> dict[str, Any]:
+    """Build dim_sector, dim_stock, dim_stock_alias and dim_event.
+
+    dim_stock's universe is the union of the symbols the index lists and the
+    symbols we hold prices for. A symbol in the index with no usable price
+    history still gets a row, because dropping it would make a 50-stock index
+    silently become a 47-stock one; `dim_stock.price_source` is NULL for it and
+    `is_survivor` is FALSE.
+    """
+    window_start, window_end = window
+    report: dict[str, Any] = {}
+
+    for name in STOCK_DIM_TABLES:
+        con.execute(f"DROP TABLE IF EXISTS {name}")
+
+    _build_dim_sector(con, sector_cfg)
+    report["dim_sector"] = _count(con, "dim_sector")
+
+    sector_keys = {
+        r[0]: r[1]
+        for r in con.execute(
+            "SELECT sector_name, sector_key FROM dim_sector"
+        ).fetchall()
+    }
+
+    meta_rows = _read_stg_meta(con)
+    price_rows = _read_stock_price_bounds(con)
+    universe = sorted(set(meta_rows) | set(price_rows))
+
+    rows, unknown, unmapped_aliases = [], [], []
+    for i, symbol in enumerate(universe, start=1):
+        company, industry, isin = meta_rows.get(symbol, ("", "", ""))
+        first, last, n = price_rows.get(symbol, (None, None, 0))
+        entry = resolve_sector(symbol, industry or None, sector_cfg)
+
+        sector_name = entry.sector
+        sector_key = sector_keys.get(sector_name)
+        sector_source = entry.source
+        if sector_key is None:
+            # Either the symbol had no usable industry, or it named a sector
+            # that is not one of the configured ten. Both are reported, and
+            # neither is guessed at.
+            unknown.append(
+                {
+                    "symbol": symbol,
+                    "sector": sector_name,
+                    "reason": (
+                        "sector not in dim_sector" if sector_name else "no industry label"
+                    ),
+                }
+            )
+            sector_name, sector_source = "", "unknown"
+
+        # Listed on or before the window start => it was really in the index
+        # during the period we are studying. Later, or no prices at all, means
+        # it only appears because we are using today's constituent list.
+        is_survivor = bool(first is not None and first.isoformat() <= window_start)
+
+        rows.append(
+            (
+                i, symbol,
+                company or entry.company or "",
+                sector_key,
+                isin or None,
+                symbol in meta_rows,
+                first, last,
+                sector_source,
+                "yahoo_chart_api" if n else None,
+                is_survivor,
+            )
+        )
+
+    con.execute(
+        """
+        CREATE TABLE dim_stock (
+            stock_key        INTEGER PRIMARY KEY,
+            symbol           VARCHAR UNIQUE,
+            company_name     VARCHAR,
+            sector_key       INTEGER,
+            isin             VARCHAR,
+            in_nifty50       BOOLEAN,
+            first_trade_date DATE,
+            last_trade_date  DATE,
+            sector_source    VARCHAR,
+            price_source     VARCHAR,
+            is_survivor      BOOLEAN
+        )
+        """
+    )
+    _insert_many(con, "INSERT INTO dim_stock VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+    report["dim_stock"] = len(rows)
+    report["dim_stock_unknown_sector"] = unknown
+    report["dim_stock_without_prices"] = sorted(
+        s for s in universe if s not in price_rows
+    )
+    report["dim_stock_not_survivors"] = sorted(
+        r[1] for r in rows if not r[10]
+    )
+
+    _build_dim_stock_alias(con, alias_rules, universe, unmapped_aliases)
+    report["dim_stock_alias"] = _count(con, "dim_stock_alias")
+    report["dim_stock_alias_without_stock"] = unmapped_aliases
+
+    _build_dim_event(con, events, window)
+    report["dim_event"] = _count(con, "dim_event")
+    report["dim_event_out_of_window"] = sorted(
+        e.label for e in events
+        if not (window_start <= e.date.isoformat() <= window_end)
+    )
+
+    for name in ("dim_sector", "dim_stock", "dim_stock_alias", "dim_event"):
+        log.info("%s: %s rows", name, human_int(report[name]))
+    if unknown:
+        log.warning("dim_stock: %s symbols have no resolvable sector", len(unknown))
+    return report
+
+
+def _build_dim_sector(con: duckdb.DuckDBPyConnection, cfg: SectorConfig) -> None:
+    con.execute(
+        "CREATE TABLE dim_sector (sector_key INTEGER PRIMARY KEY, sector_name VARCHAR UNIQUE)"
+    )
+    con.executemany(
+        "INSERT INTO dim_sector VALUES (?, ?)",
+        [(i, name) for i, name in enumerate(cfg.sectors, start=1)],
+    )
+
+
+def _read_stg_meta(
+    con: duckdb.DuckDBPyConnection,
+) -> dict[str, tuple[str, str, str]]:
+    if not con.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_name = 'stg_meta'"
+    ).fetchone()[0]:
+        return {}
+    return {
+        r[0]: (r[1] or "", r[2] or "", r[3] or "")
+        for r in con.execute(
+            "SELECT symbol, company_name, industry, isin FROM stg_meta"
+        ).fetchall()
+    }
+
+
+def _read_stock_price_bounds(
+    con: duckdb.DuckDBPyConnection,
+) -> dict[str, tuple[Any, Any, int]]:
+    if not con.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_name = 'stg_stocks'"
+    ).fetchone()[0]:
+        return {}
+    return {
+        r[0]: (r[1], r[2], int(r[3]))
+        for r in con.execute(
+            "SELECT symbol, min(trade_date), max(trade_date), count(*) "
+            "FROM stg_stocks GROUP BY symbol"
+        ).fetchall()
+    }
+
+
+def _build_dim_stock_alias(
+    con: duckdb.DuckDBPyConnection,
+    rules: AliasRules,
+    universe: list[str],
+    unmapped: list[dict[str, str]],
+) -> None:
+    con.execute(
+        """
+        CREATE TABLE dim_stock_alias (
+            stock_key       INTEGER,
+            alias           VARCHAR,
+            alias_type      VARCHAR,
+            case_sensitive  BOOLEAN,
+            needs_context   BOOLEAN,
+            provider_symbol VARCHAR
+        )
+        """
+    )
+    known = set(universe)
+    rows: list[tuple[Any, ...]] = []
+    for symbol in sorted(rules.aliases):
+        if symbol not in known:
+            # The alias config lists companies that are not current Nifty 50
+            # constituents (Wipro, HDFC, Yes Bank...). They are legitimate
+            # headline spellings but they are not stocks in this study, so they
+            # are reported rather than silently loaded.
+            unmapped.append({"symbol": symbol, "reason": "not a dim_stock member"})
+            continue
+        stock_key = int(
+            con.execute("SELECT stock_key FROM dim_stock WHERE symbol = ?", [symbol])
+            .fetchone()[0]
+        )
+        entry = rules.aliases[symbol]
+        for alias in dict.fromkeys(entry.get("names", [])):
+            alias = str(alias).strip()
+            if not alias:
+                continue
+            case_sensitive = alias in entry.get("case_sensitive", [])
+            needs_context = alias in entry.get("ambiguous", [])
+            # A bare upper-case token that matches the listing symbol is a
+            # ticker; anything with a space is a written name.
+            alias_type = "ticker" if (alias == symbol or alias.isupper()) else "name"
+            rows.append(
+                (stock_key, alias, alias_type, case_sensitive, needs_context, None)
+            )
+    _insert_many(con, "INSERT INTO dim_stock_alias VALUES (?,?,?,?,?,?)", rows)
+
+
+def _build_dim_event(
+    con: duckdb.DuckDBPyConnection,
+    events: list[EventEntry],
+    window: tuple[str, str],
+) -> None:
+    con.execute(
+        """
+        CREATE TABLE dim_event (
+            event_key   INTEGER PRIMARY KEY,
+            event_label VARCHAR,
+            event_type  VARCHAR,
+            start_date  DATE,
+            end_date    DATE,
+            sector_key  INTEGER
+        )
+        """
+    )
+    window_start, window_end = window
+    kept = [e for e in events if window_start <= e.date.isoformat() <= window_end]
+    _insert_many(
+        con,
+        "INSERT INTO dim_event VALUES (?,?,?,?,?,?)",
+        [
+            (i, e.label, e.event_type, e.date, e.date, None)
+            for i, e in enumerate(kept, start=1)
+        ],
+    )
