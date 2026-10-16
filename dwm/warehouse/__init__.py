@@ -90,6 +90,15 @@ def _build_stock_facts(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
 
     with step("build fact_stock_daily"):
         counts = stock_facts.build_stock_daily(con)
+
+    # The checker's neighbour search needs a fitted vectoriser. Built here, with
+    # the rest of the derived artefacts, so the first /check request does not
+    # pay for a minute of fitting in the request path.
+    from dwm.inference.checker import build_tfidf
+
+    with step("build the headline neighbour model"):
+        tfidf = build_tfidf(con)
+
     from dwm.warehouse import quality
 
     report = quality.write(con)
@@ -99,6 +108,7 @@ def _build_stock_facts(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         "check": stock_facts.check(con),
         "coverage": stock_facts.coverage(con),
         "top_outliers": stock_facts.outlier_rows(con, limit=10),
+        "tfidf": tfidf,
         "quality_report": report,
     }
 

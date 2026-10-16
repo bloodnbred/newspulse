@@ -381,6 +381,13 @@ def ui_manifest() -> dict[str, Any]:
     return _guard(store.build_manifest)
 
 
+# v2 routes, mounted BEFORE the static catch-all so an API path can never be
+# swallowed by the file mount. v1 routes above are untouched.
+from dwm.api.v2 import router as v2_router  # noqa: E402
+
+app.include_router(v2_router)
+
+
 # The static front end, mounted last so every API route above wins the match.
 # This is what makes the dashboard a single process: `dwm serve` serves the
 # data and the page that reads it, on one origin, with no CORS and no second

@@ -19,6 +19,14 @@ htmlcov/
 data/raw/*
 !data/raw/.gitkeep
 
+# --- fitted models (regenerable, and rule 5 says they never ship) ---
+# models/tfidf.joblib is the vectoriser behind /check's similar-headlines search.
+# Rebuilt by `python -m dwm build`; committing it would add a binary blob that
+# silently drifts from the corpus it was fitted on.
+models/
+*.joblib
+*.pkl
+
 # --- warehouse (large binary) ---
 warehouse/*.duckdb
 warehouse/*.duckdb.wal
