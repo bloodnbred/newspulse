@@ -285,11 +285,28 @@ def mine(
     db: DbOpt = None,
     years: YearsOpt = 5,
     sample: SampleOpt = None,
+    operation: Annotated[
+        str | None,
+        typer.Option("--op", help="Named v2 operation: events, stockclusters, "
+                                  "marketrules, direction, surprise, all. "
+                                  "Omit to run the seven v1 questions."),
+    ] = None,
 ) -> None:
-    """Run the mining stage: trends, bursts, clusters, rules, classifier."""
+    """Run the mining stage.
+
+    Without --op this runs the seven v1 research questions, unchanged. With
+    --op it runs one of the five v2 analyses, or `all` for all five.
+    """
+    settings = _settings(db, sample, years, 100_000)
+
+    if operation:
+        from dwm.mining import v2
+
+        _echo_json(v2.run(settings, operation=operation))
+        return
+
     from dwm.mining import run_mining
 
-    settings = _settings(db, sample, years, 100_000)
     _echo_json(run_mining(settings))
 
 

@@ -1,0 +1,1554 @@
+{
+  "operations": [
+    {
+      "description": "Event study: abnormal returns around named events",
+      "name": "events"
+    },
+    {
+      "description": "Group stocks by behaviour (KMeans, silhouette-chosen k)",
+      "name": "stockclusters"
+    },
+    {
+      "description": "Association rules over sector-day transactions",
+      "name": "marketrules"
+    },
+    {
+      "description": "Next-day direction classifier against two baselines",
+      "name": "direction"
+    },
+    {
+      "description": "Days where news and price disagreed",
+      "name": "surprise"
+    }
+  ],
+  "results": {
+    "direction": {
+      "baseline_majority": 0.5049,
+      "baseline_yesterday": 0.5008,
+      "best_accuracy": 0.4995,
+      "best_model": "naive_bayes",
+      "description": "Next-day direction classifier against two baselines",
+      "elapsed_s": 0.264,
+      "features": [
+        "news_1d",
+        "news_5d",
+        "sentiment_1d",
+        "sensational_share",
+        "return_t",
+        "return_5d",
+        "volatility_20d",
+        "dow",
+        "month"
+      ],
+      "models": [
+        {
+          "accuracy": 0.4992,
+          "balanced_accuracy": 0.4983,
+          "beats_majority": false,
+          "f1": 0.5455,
+          "model": "decision_tree",
+          "notes": "n_test=8331; chronological split, no shuffling; BELOW the majority baseline; p=0.851 vs majority: not significant",
+          "p_vs_baseline": 0.851031
+        },
+        {
+          "accuracy": 0.4995,
+          "balanced_accuracy": 0.4976,
+          "beats_majority": false,
+          "f1": 0.5805,
+          "model": "naive_bayes",
+          "notes": "n_test=8331; chronological split, no shuffling; BELOW the majority baseline; p=0.841 vs majority: not significant",
+          "p_vs_baseline": 0.840628
+        },
+        {
+          "accuracy": 0.4919,
+          "balanced_accuracy": 0.4914,
+          "beats_majority": false,
+          "f1": 0.5185,
+          "model": "logistic",
+          "notes": "n_test=8331; chronological split, no shuffling; BELOW the majority baseline; p=0.991 vs majority: not significant",
+          "p_vs_baseline": 0.991285
+        }
+      ],
+      "operation": "direction",
+      "rows": 54551,
+      "rows_dropped_short_window": 76,
+      "skill_over_baseline": -0.0054,
+      "split": {
+        "test": 8331,
+        "train": 37903,
+        "train_end": 20181227,
+        "validation": 8317,
+        "validation_end": 20190930
+      },
+      "status": "ok",
+      "tree_rules": "|--- return_5d <= 1.91\n|   |--- news_5d <= 3.10\n|   |   |--- return_5d <= -5.06\n|   |   |   |--- return_5d <= -5.15\n|   |   |   |   |--- class: True\n|   |   |   |--- return_5d >  -5.15\n|   |   |   |   |--- class: True\n|   |   |--- return_5d >  -5.06\n|   |   |   |--- return_t <= 5.08\n|   |   |   |   |--- class: True\n|   |   |   |--- return_t >  5.08\n|   |   |   |   |--- class: False\n|   |--- news_5d >  3.10\n|   |   |--- month <= 7.50\n|   |   |   |--- month <= 6.50\n|   |   |   |   |--- class: True\n|   |   |   |--- month >  6.50\n|   |   |   |   |--- class: True\n|   |   |--- month >  7.50\n|   |   |   |--- volatility_20d <= 2.09\n|   |   |   |   |--- class: False\n|   |   |   |--- volatility_20d >  2.09\n|   |   |   |   |--- class: True\n|--- return_5d >  1.91\n|   |--- sensational_share <= 0.31\n|   |   |--- return_5d <= 1.97\n|   |   |   |--- news_1d <= 4.50\n|   |   |   |   |--- class: False\n|   |   |   |--- news_1d >  4.50\n|   |   |   |   |--- class: True\n|   |   |--- return_5d >  1.97\n|   |   |   |--- sensational_share <= 0.25\n|   |   |   |   |--- class: False\n|   |   |   |--- sensational_share >  0.25\n|   |   |   |   |--- class: True\n|   |--- sensational_share >  0.31\n|   |   |--- volatility_20d <= 1.51\n|   |   |   |--- return_t <= 1.01\n|   |   |   |   |--- class: False\n|   |   |   |--- return_t >  1.01\n|   |   |   |   |--- class: True\n|   |   |--- volatility_20d >  1.51\n|   |   |   |--- sentiment_1d <= -0.01\n|   |   |   |   |--- class: False\n|   |   |   |--- sentiment_1d >  -0.01\n|   |   |   |   |--- class: False\n",
+      "verdict": "No model beat the majority-class baseline. On this data, these news and price features carry no usable skill for predicting next-day direction."
+    },
+    "events": {
+      "by_event": [
+        {
+          "event_key": 1,
+          "mean_car_0_5": 2.5242,
+          "n_stocks": 8,
+          "p_value": 0.232009,
+          "sd": 5.4561,
+          "sector_key": 1,
+          "t_statistic": 1.3086,
+          "testable": true
+        },
+        {
+          "event_key": 1,
+          "mean_car_0_5": -0.3873,
+          "n_stocks": 4,
+          "p_value": 0.876222,
+          "sd": 4.571,
+          "sector_key": 2,
+          "t_statistic": -0.1695,
+          "testable": true
+        },
+        {
+          "event_key": 1,
+          "mean_car_0_5": -2.4972,
+          "n_stocks": 5,
+          "p_value": 0.196523,
+          "sd": 3.6071,
+          "sector_key": 3,
+          "t_statistic": -1.5481,
+          "testable": true
+        },
+        {
+          "event_key": 1,
+          "mean_car_0_5": -4.0603,
+          "n_stocks": 4,
+          "p_value": 0.248096,
+          "sd": 5.679,
+          "sector_key": 4,
+          "t_statistic": -1.4299,
+          "testable": true
+        },
+        {
+          "event_key": 1,
+          "mean_car_0_5": -4.7364,
+          "n_stocks": 5,
+          "p_value": 0.166179,
+          "sd": 6.2647,
+          "sector_key": 5,
+          "t_statistic": -1.6906,
+          "testable": true
+        },
+        {
+          "event_key": 1,
+          "mean_car_0_5": 0.5838,
+          "n_stocks": 4,
+          "p_value": 0.821713,
+          "sd": 4.7505,
+          "sector_key": 6,
+          "t_statistic": 0.2458,
+          "testable": true
+        },
+        {
+          "event_key": 1,
+          "mean_car_0_5": 0.2171,
+          "n_stocks": 4,
+          "p_value": 0.953686,
+          "sd": 6.8842,
+          "sector_key": 7,
+          "t_statistic": 0.0631,
+          "testable": true
+        },
+        {
+          "event_key": 1,
+          "mean_car_0_5": 0.4981,
+          "n_stocks": 6,
+          "p_value": 0.815963,
+          "sd": 4.9739,
+          "sector_key": 8,
+          "t_statistic": 0.2453,
+          "testable": true
+        },
+        {
+          "event_key": 1,
+          "mean_car_0_5": -0.1479,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 1,
+          "mean_car_0_5": -3.5956,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 4.0691,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 2,
+          "mean_car_0_5": 2.9835,
+          "n_stocks": 8,
+          "p_value": 0.185107,
+          "sd": 5.7418,
+          "sector_key": 1,
+          "t_statistic": 1.4697,
+          "testable": true
+        },
+        {
+          "event_key": 2,
+          "mean_car_0_5": -4.8407,
+          "n_stocks": 4,
+          "p_value": 0.002431,
+          "sd": 1.0132,
+          "sector_key": 2,
+          "t_statistic": -9.5553,
+          "testable": true
+        },
+        {
+          "event_key": 2,
+          "mean_car_0_5": -0.2668,
+          "n_stocks": 5,
+          "p_value": 0.908401,
+          "sd": 4.869,
+          "sector_key": 3,
+          "t_statistic": -0.1225,
+          "testable": true
+        },
+        {
+          "event_key": 2,
+          "mean_car_0_5": 5.013,
+          "n_stocks": 4,
+          "p_value": 0.089578,
+          "sd": 4.0491,
+          "sector_key": 4,
+          "t_statistic": 2.4761,
+          "testable": true
+        },
+        {
+          "event_key": 2,
+          "mean_car_0_5": 1.2646,
+          "n_stocks": 5,
+          "p_value": 0.435814,
+          "sd": 3.2689,
+          "sector_key": 5,
+          "t_statistic": 0.865,
+          "testable": true
+        },
+        {
+          "event_key": 2,
+          "mean_car_0_5": 3.3628,
+          "n_stocks": 4,
+          "p_value": 0.064277,
+          "sd": 2.347,
+          "sector_key": 6,
+          "t_statistic": 2.8657,
+          "testable": true
+        },
+        {
+          "event_key": 2,
+          "mean_car_0_5": 0.9101,
+          "n_stocks": 4,
+          "p_value": 0.730073,
+          "sd": 4.8053,
+          "sector_key": 7,
+          "t_statistic": 0.3788,
+          "testable": true
+        },
+        {
+          "event_key": 2,
+          "mean_car_0_5": 1.2952,
+          "n_stocks": 7,
+          "p_value": 0.238814,
+          "sd": 2.6203,
+          "sector_key": 8,
+          "t_statistic": 1.3078,
+          "testable": true
+        },
+        {
+          "event_key": 2,
+          "mean_car_0_5": 0.0801,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 2,
+          "mean_car_0_5": 5.0321,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 1.5619,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 3,
+          "mean_car_0_5": 0.1662,
+          "n_stocks": 8,
+          "p_value": 0.960369,
+          "sd": 9.131,
+          "sector_key": 1,
+          "t_statistic": 0.0515,
+          "testable": true
+        },
+        {
+          "event_key": 3,
+          "mean_car_0_5": 0.5088,
+          "n_stocks": 4,
+          "p_value": 0.82029,
+          "sd": 4.1064,
+          "sector_key": 2,
+          "t_statistic": 0.2478,
+          "testable": true
+        },
+        {
+          "event_key": 3,
+          "mean_car_0_5": -6.1575,
+          "n_stocks": 5,
+          "p_value": 0.014034,
+          "sd": 3.302,
+          "sector_key": 3,
+          "t_statistic": -4.1698,
+          "testable": true
+        },
+        {
+          "event_key": 3,
+          "mean_car_0_5": 1.4161,
+          "n_stocks": 4,
+          "p_value": 0.67956,
+          "sd": 6.2149,
+          "sector_key": 4,
+          "t_statistic": 0.4557,
+          "testable": true
+        },
+        {
+          "event_key": 3,
+          "mean_car_0_5": 3.8608,
+          "n_stocks": 5,
+          "p_value": 0.141469,
+          "sd": 4.7212,
+          "sector_key": 5,
+          "t_statistic": 1.8285,
+          "testable": true
+        },
+        {
+          "event_key": 3,
+          "mean_car_0_5": -4.0839,
+          "n_stocks": 4,
+          "p_value": 0.094714,
+          "sd": 3.3842,
+          "sector_key": 6,
+          "t_statistic": -2.4136,
+          "testable": true
+        },
+        {
+          "event_key": 3,
+          "mean_car_0_5": 5.3767,
+          "n_stocks": 4,
+          "p_value": 0.063467,
+          "sd": 3.7323,
+          "sector_key": 7,
+          "t_statistic": 2.8812,
+          "testable": true
+        },
+        {
+          "event_key": 3,
+          "mean_car_0_5": -3.8403,
+          "n_stocks": 7,
+          "p_value": 0.16157,
+          "sd": 6.3656,
+          "sector_key": 8,
+          "t_statistic": -1.5961,
+          "testable": true
+        },
+        {
+          "event_key": 3,
+          "mean_car_0_5": 7.2998,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 3,
+          "mean_car_0_5": -4.9074,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 6.6188,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 4,
+          "mean_car_0_5": 0.6923,
+          "n_stocks": 8,
+          "p_value": 0.653743,
+          "sd": 4.1808,
+          "sector_key": 1,
+          "t_statistic": 0.4684,
+          "testable": true
+        },
+        {
+          "event_key": 4,
+          "mean_car_0_5": 0.6408,
+          "n_stocks": 4,
+          "p_value": 0.54474,
+          "sd": 1.882,
+          "sector_key": 2,
+          "t_statistic": 0.681,
+          "testable": true
+        },
+        {
+          "event_key": 4,
+          "mean_car_0_5": -1.8833,
+          "n_stocks": 5,
+          "p_value": 0.293251,
+          "sd": 3.4833,
+          "sector_key": 3,
+          "t_statistic": -1.209,
+          "testable": true
+        },
+        {
+          "event_key": 4,
+          "mean_car_0_5": 1.3236,
+          "n_stocks": 4,
+          "p_value": 0.314553,
+          "sd": 2.1966,
+          "sector_key": 4,
+          "t_statistic": 1.2051,
+          "testable": true
+        },
+        {
+          "event_key": 4,
+          "mean_car_0_5": -3.3661,
+          "n_stocks": 5,
+          "p_value": 0.107477,
+          "sd": 3.6397,
+          "sector_key": 5,
+          "t_statistic": -2.068,
+          "testable": true
+        },
+        {
+          "event_key": 4,
+          "mean_car_0_5": 4.2292,
+          "n_stocks": 4,
+          "p_value": 0.142169,
+          "sd": 4.2737,
+          "sector_key": 6,
+          "t_statistic": 1.9792,
+          "testable": true
+        },
+        {
+          "event_key": 4,
+          "mean_car_0_5": -4.2519,
+          "n_stocks": 4,
+          "p_value": 0.175018,
+          "sd": 4.8068,
+          "sector_key": 7,
+          "t_statistic": -1.7691,
+          "testable": true
+        },
+        {
+          "event_key": 4,
+          "mean_car_0_5": -0.8037,
+          "n_stocks": 7,
+          "p_value": 0.546293,
+          "sd": 3.3265,
+          "sector_key": 8,
+          "t_statistic": -0.6392,
+          "testable": true
+        },
+        {
+          "event_key": 4,
+          "mean_car_0_5": -0.102,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 4,
+          "mean_car_0_5": 10.0399,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 5.2198,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 5,
+          "mean_car_0_5": -1.8609,
+          "n_stocks": 8,
+          "p_value": 0.067254,
+          "sd": 2.4327,
+          "sector_key": 1,
+          "t_statistic": -2.1636,
+          "testable": true
+        },
+        {
+          "event_key": 5,
+          "mean_car_0_5": 0.6941,
+          "n_stocks": 4,
+          "p_value": 0.389912,
+          "sd": 1.3845,
+          "sector_key": 2,
+          "t_statistic": 1.0026,
+          "testable": true
+        },
+        {
+          "event_key": 5,
+          "mean_car_0_5": -0.8234,
+          "n_stocks": 5,
+          "p_value": 0.151114,
+          "sd": 1.0392,
+          "sector_key": 3,
+          "t_statistic": -1.7718,
+          "testable": true
+        },
+        {
+          "event_key": 5,
+          "mean_car_0_5": -1.0029,
+          "n_stocks": 4,
+          "p_value": 0.461837,
+          "sd": 2.3835,
+          "sector_key": 4,
+          "t_statistic": -0.8415,
+          "testable": true
+        },
+        {
+          "event_key": 5,
+          "mean_car_0_5": 2.1378,
+          "n_stocks": 5,
+          "p_value": 0.180397,
+          "sd": 2.9495,
+          "sector_key": 5,
+          "t_statistic": 1.6207,
+          "testable": true
+        },
+        {
+          "event_key": 5,
+          "mean_car_0_5": 1.5322,
+          "n_stocks": 4,
+          "p_value": 0.534114,
+          "sd": 4.3752,
+          "sector_key": 6,
+          "t_statistic": 0.7004,
+          "testable": true
+        },
+        {
+          "event_key": 5,
+          "mean_car_0_5": -1.3974,
+          "n_stocks": 4,
+          "p_value": 0.383624,
+          "sd": 2.7454,
+          "sector_key": 7,
+          "t_statistic": -1.018,
+          "testable": true
+        },
+        {
+          "event_key": 5,
+          "mean_car_0_5": 0.5687,
+          "n_stocks": 7,
+          "p_value": 0.605675,
+          "sd": 2.7631,
+          "sector_key": 8,
+          "t_statistic": 0.5446,
+          "testable": true
+        },
+        {
+          "event_key": 5,
+          "mean_car_0_5": 4.4734,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 5,
+          "mean_car_0_5": -0.8762,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 3.1034,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 6,
+          "mean_car_0_5": 1.1342,
+          "n_stocks": 9,
+          "p_value": 0.509025,
+          "sd": 4.9233,
+          "sector_key": 1,
+          "t_statistic": 0.6912,
+          "testable": true
+        },
+        {
+          "event_key": 6,
+          "mean_car_0_5": -1.9543,
+          "n_stocks": 4,
+          "p_value": 0.269626,
+          "sd": 2.8937,
+          "sector_key": 2,
+          "t_statistic": -1.3507,
+          "testable": true
+        },
+        {
+          "event_key": 6,
+          "mean_car_0_5": 1.976,
+          "n_stocks": 5,
+          "p_value": 0.383449,
+          "sd": 4.5177,
+          "sector_key": 3,
+          "t_statistic": 0.978,
+          "testable": true
+        },
+        {
+          "event_key": 6,
+          "mean_car_0_5": 4.2757,
+          "n_stocks": 4,
+          "p_value": 0.12379,
+          "sd": 4.0273,
+          "sector_key": 4,
+          "t_statistic": 2.1233,
+          "testable": true
+        },
+        {
+          "event_key": 6,
+          "mean_car_0_5": 0.4116,
+          "n_stocks": 5,
+          "p_value": 0.813328,
+          "sd": 3.6496,
+          "sector_key": 5,
+          "t_statistic": 0.2522,
+          "testable": true
+        },
+        {
+          "event_key": 6,
+          "mean_car_0_5": 0.0203,
+          "n_stocks": 4,
+          "p_value": 0.993561,
+          "sd": 4.6384,
+          "sector_key": 6,
+          "t_statistic": 0.0088,
+          "testable": true
+        },
+        {
+          "event_key": 6,
+          "mean_car_0_5": 5.1393,
+          "n_stocks": 4,
+          "p_value": 0.094779,
+          "sd": 4.2601,
+          "sector_key": 7,
+          "t_statistic": 2.4128,
+          "testable": true
+        },
+        {
+          "event_key": 6,
+          "mean_car_0_5": 1.4409,
+          "n_stocks": 7,
+          "p_value": 0.257484,
+          "sd": 3.0471,
+          "sector_key": 8,
+          "t_statistic": 1.2511,
+          "testable": true
+        },
+        {
+          "event_key": 6,
+          "mean_car_0_5": 2.5127,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 6,
+          "mean_car_0_5": -0.6587,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 6.0089,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 7,
+          "mean_car_0_5": -2.5242,
+          "n_stocks": 11,
+          "p_value": 0.245096,
+          "sd": 6.7793,
+          "sector_key": 1,
+          "t_statistic": -1.2349,
+          "testable": true
+        },
+        {
+          "event_key": 7,
+          "mean_car_0_5": 0.8948,
+          "n_stocks": 4,
+          "p_value": 0.598268,
+          "sd": 3.0471,
+          "sector_key": 2,
+          "t_statistic": 0.5873,
+          "testable": true
+        },
+        {
+          "event_key": 7,
+          "mean_car_0_5": -7.3974,
+          "n_stocks": 5,
+          "p_value": 0.019566,
+          "sd": 4.3849,
+          "sector_key": 3,
+          "t_statistic": -3.7723,
+          "testable": true
+        },
+        {
+          "event_key": 7,
+          "mean_car_0_5": -0.9832,
+          "n_stocks": 4,
+          "p_value": 0.260421,
+          "sd": 1.421,
+          "sector_key": 4,
+          "t_statistic": -1.3837,
+          "testable": true
+        },
+        {
+          "event_key": 7,
+          "mean_car_0_5": 0.9121,
+          "n_stocks": 5,
+          "p_value": 0.653273,
+          "sd": 4.2082,
+          "sector_key": 5,
+          "t_statistic": 0.4846,
+          "testable": true
+        },
+        {
+          "event_key": 7,
+          "mean_car_0_5": 0.4393,
+          "n_stocks": 4,
+          "p_value": 0.838569,
+          "sd": 3.9576,
+          "sector_key": 6,
+          "t_statistic": 0.222,
+          "testable": true
+        },
+        {
+          "event_key": 7,
+          "mean_car_0_5": -1.0082,
+          "n_stocks": 4,
+          "p_value": 0.643369,
+          "sd": 3.9308,
+          "sector_key": 7,
+          "t_statistic": -0.513,
+          "testable": true
+        },
+        {
+          "event_key": 7,
+          "mean_car_0_5": 0.3678,
+          "n_stocks": 7,
+          "p_value": 0.826662,
+          "sd": 4.2546,
+          "sector_key": 8,
+          "t_statistic": 0.2287,
+          "testable": true
+        },
+        {
+          "event_key": 7,
+          "mean_car_0_5": -5.1793,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 7,
+          "mean_car_0_5": -2.091,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 3.471,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 8,
+          "mean_car_0_5": -0.7963,
+          "n_stocks": 11,
+          "p_value": 0.450818,
+          "sd": 3.3658,
+          "sector_key": 1,
+          "t_statistic": -0.7847,
+          "testable": true
+        },
+        {
+          "event_key": 8,
+          "mean_car_0_5": 4.1923,
+          "n_stocks": 4,
+          "p_value": 0.105562,
+          "sd": 3.6549,
+          "sector_key": 2,
+          "t_statistic": 2.2941,
+          "testable": true
+        },
+        {
+          "event_key": 8,
+          "mean_car_0_5": 1.9179,
+          "n_stocks": 5,
+          "p_value": 0.720838,
+          "sd": 11.1816,
+          "sector_key": 3,
+          "t_statistic": 0.3835,
+          "testable": true
+        },
+        {
+          "event_key": 8,
+          "mean_car_0_5": -0.4676,
+          "n_stocks": 4,
+          "p_value": 0.86552,
+          "sd": 5.0742,
+          "sector_key": 4,
+          "t_statistic": -0.1843,
+          "testable": true
+        },
+        {
+          "event_key": 8,
+          "mean_car_0_5": -1.5051,
+          "n_stocks": 5,
+          "p_value": 0.361282,
+          "sd": 3.2681,
+          "sector_key": 5,
+          "t_statistic": -1.0298,
+          "testable": true
+        },
+        {
+          "event_key": 8,
+          "mean_car_0_5": -3.4392,
+          "n_stocks": 4,
+          "p_value": 0.241057,
+          "sd": 4.7196,
+          "sector_key": 6,
+          "t_statistic": -1.4574,
+          "testable": true
+        },
+        {
+          "event_key": 8,
+          "mean_car_0_5": -5.9142,
+          "n_stocks": 4,
+          "p_value": 0.092651,
+          "sd": 4.8513,
+          "sector_key": 7,
+          "t_statistic": -2.4382,
+          "testable": true
+        },
+        {
+          "event_key": 8,
+          "mean_car_0_5": -1.9913,
+          "n_stocks": 7,
+          "p_value": 0.081864,
+          "sd": 2.5237,
+          "sector_key": 8,
+          "t_statistic": -2.0877,
+          "testable": true
+        },
+        {
+          "event_key": 8,
+          "mean_car_0_5": 0.7916,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 8,
+          "mean_car_0_5": 0.8096,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 4.729,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 9,
+          "mean_car_0_5": 1.5713,
+          "n_stocks": 11,
+          "p_value": 0.126668,
+          "sd": 3.1279,
+          "sector_key": 1,
+          "t_statistic": 1.6661,
+          "testable": true
+        },
+        {
+          "event_key": 9,
+          "mean_car_0_5": -0.121,
+          "n_stocks": 4,
+          "p_value": 0.932111,
+          "sd": 2.6159,
+          "sector_key": 2,
+          "t_statistic": -0.0925,
+          "testable": true
+        },
+        {
+          "event_key": 9,
+          "mean_car_0_5": -3.2246,
+          "n_stocks": 5,
+          "p_value": 0.147893,
+          "sd": 4.0275,
+          "sector_key": 3,
+          "t_statistic": -1.7903,
+          "testable": true
+        },
+        {
+          "event_key": 9,
+          "mean_car_0_5": -0.1848,
+          "n_stocks": 4,
+          "p_value": 0.838825,
+          "sd": 1.6673,
+          "sector_key": 4,
+          "t_statistic": -0.2216,
+          "testable": true
+        },
+        {
+          "event_key": 9,
+          "mean_car_0_5": 0.2487,
+          "n_stocks": 5,
+          "p_value": 0.911998,
+          "sd": 4.7266,
+          "sector_key": 5,
+          "t_statistic": 0.1177,
+          "testable": true
+        },
+        {
+          "event_key": 9,
+          "mean_car_0_5": 0.1736,
+          "n_stocks": 4,
+          "p_value": 0.938886,
+          "sd": 4.1695,
+          "sector_key": 6,
+          "t_statistic": 0.0833,
+          "testable": true
+        },
+        {
+          "event_key": 9,
+          "mean_car_0_5": -0.0386,
+          "n_stocks": 4,
+          "p_value": 0.958583,
+          "sd": 1.3675,
+          "sector_key": 7,
+          "t_statistic": -0.0564,
+          "testable": true
+        },
+        {
+          "event_key": 9,
+          "mean_car_0_5": 3.8668,
+          "n_stocks": 7,
+          "p_value": 0.043837,
+          "sd": 4.0213,
+          "sector_key": 8,
+          "t_statistic": 2.5441,
+          "testable": true
+        },
+        {
+          "event_key": 9,
+          "mean_car_0_5": 0.9623,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 9,
+          "mean_car_0_5": -2.092,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 0.3424,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 10,
+          "mean_car_0_5": -0.785,
+          "n_stocks": 11,
+          "p_value": 0.5886,
+          "sd": 4.6595,
+          "sector_key": 1,
+          "t_statistic": -0.5588,
+          "testable": true
+        },
+        {
+          "event_key": 10,
+          "mean_car_0_5": -2.0997,
+          "n_stocks": 4,
+          "p_value": 0.18374,
+          "sd": 2.4402,
+          "sector_key": 2,
+          "t_statistic": -1.721,
+          "testable": true
+        },
+        {
+          "event_key": 10,
+          "mean_car_0_5": -0.3193,
+          "n_stocks": 5,
+          "p_value": 0.810383,
+          "sd": 2.7861,
+          "sector_key": 3,
+          "t_statistic": -0.2563,
+          "testable": true
+        },
+        {
+          "event_key": 10,
+          "mean_car_0_5": 4.5148,
+          "n_stocks": 4,
+          "p_value": 0.046596,
+          "sd": 2.757,
+          "sector_key": 4,
+          "t_statistic": 3.2751,
+          "testable": true
+        },
+        {
+          "event_key": 10,
+          "mean_car_0_5": -4.1399,
+          "n_stocks": 5,
+          "p_value": 0.194115,
+          "sd": 5.9397,
+          "sector_key": 5,
+          "t_statistic": -1.5585,
+          "testable": true
+        },
+        {
+          "event_key": 10,
+          "mean_car_0_5": -0.8864,
+          "n_stocks": 4,
+          "p_value": 0.49312,
+          "sd": 2.2776,
+          "sector_key": 6,
+          "t_statistic": -0.7783,
+          "testable": true
+        },
+        {
+          "event_key": 10,
+          "mean_car_0_5": 0.795,
+          "n_stocks": 4,
+          "p_value": 0.718567,
+          "sd": 4.015,
+          "sector_key": 7,
+          "t_statistic": 0.396,
+          "testable": true
+        },
+        {
+          "event_key": 10,
+          "mean_car_0_5": -1.3656,
+          "n_stocks": 7,
+          "p_value": 0.659637,
+          "sd": 7.8027,
+          "sector_key": 8,
+          "t_statistic": -0.4631,
+          "testable": true
+        },
+        {
+          "event_key": 10,
+          "mean_car_0_5": 1.4525,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 10,
+          "mean_car_0_5": -5.4081,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 11.8228,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 11,
+          "mean_car_0_5": 1.6171,
+          "n_stocks": 11,
+          "p_value": 0.296828,
+          "sd": 4.8729,
+          "sector_key": 1,
+          "t_statistic": 1.1007,
+          "testable": true
+        },
+        {
+          "event_key": 11,
+          "mean_car_0_5": -4.6623,
+          "n_stocks": 4,
+          "p_value": 0.074027,
+          "sd": 3.4585,
+          "sector_key": 2,
+          "t_statistic": -2.6962,
+          "testable": true
+        },
+        {
+          "event_key": 11,
+          "mean_car_0_5": -0.5317,
+          "n_stocks": 5,
+          "p_value": 0.902297,
+          "sd": 9.0945,
+          "sector_key": 3,
+          "t_statistic": -0.1307,
+          "testable": true
+        },
+        {
+          "event_key": 11,
+          "mean_car_0_5": -5.5948,
+          "n_stocks": 4,
+          "p_value": 0.040171,
+          "sd": 3.2191,
+          "sector_key": 4,
+          "t_statistic": -3.476,
+          "testable": true
+        },
+        {
+          "event_key": 11,
+          "mean_car_0_5": -2.8414,
+          "n_stocks": 5,
+          "p_value": 0.308246,
+          "sd": 5.447,
+          "sector_key": 5,
+          "t_statistic": -1.1664,
+          "testable": true
+        },
+        {
+          "event_key": 11,
+          "mean_car_0_5": 3.6684,
+          "n_stocks": 4,
+          "p_value": 0.044341,
+          "sd": 2.1957,
+          "sector_key": 6,
+          "t_statistic": 3.3414,
+          "testable": true
+        },
+        {
+          "event_key": 11,
+          "mean_car_0_5": -6.7779,
+          "n_stocks": 4,
+          "p_value": 0.029342,
+          "sd": 3.4499,
+          "sector_key": 7,
+          "t_statistic": -3.9294,
+          "testable": true
+        },
+        {
+          "event_key": 11,
+          "mean_car_0_5": 0.3685,
+          "n_stocks": 7,
+          "p_value": 0.885134,
+          "sd": 6.4689,
+          "sector_key": 8,
+          "t_statistic": 0.1507,
+          "testable": true
+        },
+        {
+          "event_key": 11,
+          "mean_car_0_5": -6.1928,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 11,
+          "mean_car_0_5": 3.42,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 2.0609,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 12,
+          "mean_car_0_5": -1.0638,
+          "n_stocks": 11,
+          "p_value": 0.563348,
+          "sd": 5.9033,
+          "sector_key": 1,
+          "t_statistic": -0.5977,
+          "testable": true
+        },
+        {
+          "event_key": 12,
+          "mean_car_0_5": 1.0506,
+          "n_stocks": 4,
+          "p_value": 0.336446,
+          "sd": 1.8404,
+          "sector_key": 2,
+          "t_statistic": 1.1417,
+          "testable": true
+        },
+        {
+          "event_key": 12,
+          "mean_car_0_5": -9.0803,
+          "n_stocks": 5,
+          "p_value": 0.002797,
+          "sd": 3.0964,
+          "sector_key": 3,
+          "t_statistic": -6.5572,
+          "testable": true
+        },
+        {
+          "event_key": 12,
+          "mean_car_0_5": -2.2252,
+          "n_stocks": 4,
+          "p_value": 0.071481,
+          "sd": 1.6256,
+          "sector_key": 4,
+          "t_statistic": -2.7376,
+          "testable": true
+        },
+        {
+          "event_key": 12,
+          "mean_car_0_5": -2.0121,
+          "n_stocks": 5,
+          "p_value": 0.107402,
+          "sd": 2.175,
+          "sector_key": 5,
+          "t_statistic": -2.0686,
+          "testable": true
+        },
+        {
+          "event_key": 12,
+          "mean_car_0_5": -2.3653,
+          "n_stocks": 4,
+          "p_value": 0.534832,
+          "sd": 6.7669,
+          "sector_key": 6,
+          "t_statistic": -0.6991,
+          "testable": true
+        },
+        {
+          "event_key": 12,
+          "mean_car_0_5": -0.1983,
+          "n_stocks": 4,
+          "p_value": 0.929338,
+          "sd": 4.1173,
+          "sector_key": 7,
+          "t_statistic": -0.0963,
+          "testable": true
+        },
+        {
+          "event_key": 12,
+          "mean_car_0_5": -4.5387,
+          "n_stocks": 7,
+          "p_value": 0.016582,
+          "sd": 3.6482,
+          "sector_key": 8,
+          "t_statistic": -3.2915,
+          "testable": true
+        },
+        {
+          "event_key": 12,
+          "mean_car_0_5": 4.08,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 12,
+          "mean_car_0_5": 7.8965,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 7.4711,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 13,
+          "mean_car_0_5": 0.9779,
+          "n_stocks": 11,
+          "p_value": 0.827459,
+          "sd": 14.495,
+          "sector_key": 1,
+          "t_statistic": 0.2237,
+          "testable": true
+        },
+        {
+          "event_key": 13,
+          "mean_car_0_5": 7.2054,
+          "n_stocks": 4,
+          "p_value": 0.137194,
+          "sd": 7.1484,
+          "sector_key": 2,
+          "t_statistic": 2.0159,
+          "testable": true
+        },
+        {
+          "event_key": 13,
+          "mean_car_0_5": -15.7336,
+          "n_stocks": 5,
+          "p_value": 0.009775,
+          "sd": 7.5914,
+          "sector_key": 3,
+          "t_statistic": -4.6344,
+          "testable": true
+        },
+        {
+          "event_key": 13,
+          "mean_car_0_5": 0.3397,
+          "n_stocks": 4,
+          "p_value": 0.91623,
+          "sd": 5.9439,
+          "sector_key": 4,
+          "t_statistic": 0.1143,
+          "testable": true
+        },
+        {
+          "event_key": 13,
+          "mean_car_0_5": 2.9813,
+          "n_stocks": 5,
+          "p_value": 0.331771,
+          "sd": 6.0418,
+          "sector_key": 5,
+          "t_statistic": 1.1034,
+          "testable": true
+        },
+        {
+          "event_key": 13,
+          "mean_car_0_5": 9.4671,
+          "n_stocks": 4,
+          "p_value": 0.016412,
+          "sd": 3.8767,
+          "sector_key": 6,
+          "t_statistic": 4.8841,
+          "testable": true
+        },
+        {
+          "event_key": 13,
+          "mean_car_0_5": -14.9539,
+          "n_stocks": 4,
+          "p_value": 0.046652,
+          "sd": 9.1362,
+          "sector_key": 7,
+          "t_statistic": -3.2736,
+          "testable": true
+        },
+        {
+          "event_key": 13,
+          "mean_car_0_5": 2.1309,
+          "n_stocks": 7,
+          "p_value": 0.552179,
+          "sd": 8.955,
+          "sector_key": 8,
+          "t_statistic": 0.6296,
+          "testable": true
+        },
+        {
+          "event_key": 13,
+          "mean_car_0_5": -2.0635,
+          "n_stocks": 1,
+          "p_value": null,
+          "sd": null,
+          "sector_key": 9,
+          "t_statistic": null,
+          "testable": false
+        },
+        {
+          "event_key": 13,
+          "mean_car_0_5": 6.2064,
+          "n_stocks": 2,
+          "p_value": null,
+          "sd": 4.333,
+          "sector_key": 10,
+          "t_statistic": null,
+          "testable": false
+        }
+      ],
+      "description": "Event study: abnormal returns around named events",
+      "elapsed_s": 1.371,
+      "events": 13,
+      "invalid": 18,
+      "invalid_reasons": {
+        "only 0 pre-event sessions": 14,
+        "only 41 pre-event sessions": 1,
+        "only 63 pre-event sessions": 1,
+        "only 73 pre-event sessions": 1,
+        "only 89 pre-event sessions": 1
+      },
+      "operation": "events",
+      "overlaps": [],
+      "results": 611,
+      "status": "ok",
+      "valid": 593
+    },
+    "marketrules": {
+      "caveat": "These are associations within a five-year sample, not causes. A rule with lift 1.4 means the consequent co-occurred 1.4x as often with the antecedent; it does not mean the antecedent produced it.",
+      "description": "Association rules over sector-day transactions",
+      "elapsed_s": 0.292,
+      "operation": "marketrules",
+      "rules": 87,
+      "rules_before_count_filter": 87,
+      "status": "ok",
+      "thresholds": {
+        "max_len": 3,
+        "min_confidence": 0.55,
+        "min_lift": 1.15,
+        "min_support": 0.02,
+        "min_support_count": 30
+      },
+      "top_rules": [
+        {
+          "confidence": 0.5599,
+          "if": "sector_name=Telecom",
+          "lift": 1.887,
+          "n": 612,
+          "support": 0.0479,
+          "then": "sentiment=neutral, vol_regime=low"
+        },
+        {
+          "confidence": 0.9991,
+          "if": "sector_name=Telecom",
+          "lift": 1.848,
+          "n": 1092,
+          "support": 0.0855,
+          "then": "news_heat=low, vol_regime=low"
+        },
+        {
+          "confidence": 1.0,
+          "if": "sector_name=Telecom",
+          "lift": 1.842,
+          "n": 1093,
+          "support": 0.0856,
+          "then": "vol_regime=low"
+        },
+        {
+          "confidence": 1.0,
+          "if": "news_heat=low, sector_name=Telecom",
+          "lift": 1.842,
+          "n": 1092,
+          "support": 0.0855,
+          "then": "vol_regime=low"
+        },
+        {
+          "confidence": 1.0,
+          "if": "next=down, sector_name=Telecom",
+          "lift": 1.842,
+          "n": 563,
+          "support": 0.0441,
+          "then": "vol_regime=low"
+        },
+        {
+          "confidence": 1.0,
+          "if": "next=up, sector_name=Telecom",
+          "lift": 1.842,
+          "n": 530,
+          "support": 0.0415,
+          "then": "vol_regime=low"
+        },
+        {
+          "confidence": 1.0,
+          "if": "ret=down, sector_name=Telecom",
+          "lift": 1.842,
+          "n": 299,
+          "support": 0.0234,
+          "then": "vol_regime=low"
+        },
+        {
+          "confidence": 1.0,
+          "if": "ret=down_big, sector_name=Telecom",
+          "lift": 1.842,
+          "n": 270,
+          "support": 0.0211,
+          "then": "vol_regime=low"
+        },
+        {
+          "confidence": 1.0,
+          "if": "ret=up, sector_name=Telecom",
+          "lift": 1.842,
+          "n": 273,
+          "support": 0.0214,
+          "then": "vol_regime=low"
+        },
+        {
+          "confidence": 1.0,
+          "if": "sector_name=Telecom, sentiment=negative",
+          "lift": 1.842,
+          "n": 267,
+          "support": 0.0209,
+          "then": "vol_regime=low"
+        }
+      ],
+      "transactions": 12775
+    },
+    "stockclusters": {
+      "caveat": "Clusters describe similarity in historical behaviour, not business similarity or future returns. Stocks can move together because of their industry, and industry membership is partly visible in the news-volume feature that produced the cluster.",
+      "cluster_names": {
+        "0": "high news volume, low news mood",
+        "1": "high volatility, high market sensitivity, high drawdown risk",
+        "2": "low volatility, low market sensitivity, low drawdown risk"
+      },
+      "cluster_sizes": {
+        "0": 4,
+        "1": 20,
+        "2": 22
+      },
+      "clustered": 46,
+      "description": "Group stocks by behaviour (KMeans, silhouette-chosen k)",
+      "dropped_for_missing_features": [
+        "43"
+      ],
+      "elapsed_s": 0.613,
+      "k": 3,
+      "operation": "stockclusters",
+      "silhouette": 0.2045,
+      "silhouette_by_k": {
+        "3": 0.2045,
+        "4": 0.1667,
+        "5": 0.1372,
+        "6": 0.1664
+      },
+      "status": "ok"
+    },
+    "surprise": {
+      "caveat": "quiet_news_move days are where price moved and this corpus had little to say. That is a statement about the data: one news outlet does not see earnings calls, analyst notes, or wire-service headlines, so a quiet day here does not mean a quiet market.",
+      "description": "Days where news and price disagreed",
+      "elapsed_s": 0.743,
+      "news_driven": 46,
+      "operation": "surprise",
+      "quiet_news_move": 285,
+      "quiet_share_of_surprises": 0.861,
+      "sectors_scored": 10,
+      "status": "ok",
+      "surprise_days": 331,
+      "thresholds": {
+        "abs_return_z": 2.0,
+        "news_z": 2.0
+      },
+      "window": 60
+    }
+  },
+  "run_id": "20261016T162227Z"
+}
