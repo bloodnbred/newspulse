@@ -95,12 +95,16 @@ CREATE TABLE IF NOT EXISTS fact_stock_daily (
   adj_close     DOUBLE,             -- dividend-adjusted; returns use this
   volume        DOUBLE,
   turnover      DOUBLE,             -- DERIVED as close * volume, not exchange-reported
+                                   -- (turnover_is_derived below records this)
+  turnover_is_derived BOOLEAN,      -- always TRUE for rows built from this source
   return_pct    DOUBLE,             -- (adj_close / prev_adj_close - 1) * 100
   abs_change    DOUBLE,             -- adj_close - prev_adj_close
   abs_return_pct DOUBLE,            -- abs(return_pct); named apart from abs_change on purpose
   range_pct     DOUBLE,             -- (high - low) / prev_close * 100
-  volatility_20d DOUBLE,            -- stddev of the last 20 return_pct, percentage points
-  return_5d     DOUBLE,
+  volatility_20d DOUBLE,            -- stddev_samp of the last 20 return_pct, percentage
+                                   -- points; NULL until the window is full. Same
+                                   -- definition as fact_market_daily.volatility_20d
+  return_5d     DOUBLE,             -- vs the close 5 sessions ago, not vs the day before
   return_sign   INTEGER,            -- -1 | 0 | 1
   is_outlier    BOOLEAN,            -- abs(return_pct) > 25.0 (percentage points)
   next_day_return_pct DOUBLE,       -- target source, modelling only

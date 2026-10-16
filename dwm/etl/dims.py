@@ -165,7 +165,11 @@ def _quote(value: str) -> str:
 
 
 def build_dims(
-    con: duckdb.DuckDBPyConnection, *, topic_map: TopicMap, specs: dict[str, DatasetSpec]
+    con: duckdb.DuckDBPyConnection,
+    *,
+    topic_map: TopicMap,
+    specs: dict[str, DatasetSpec],
+    sources: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     """Build all five dimensions. Returns row counts by table name."""
     counts: dict[str, int] = {}
@@ -184,7 +188,7 @@ def build_dims(
     _build_dim_topic(con, topic_map)
     counts["dim_topic"] = _count(con, "dim_topic")
 
-    _build_dim_dataset(con, specs)
+    _build_dim_dataset(con, specs, sources)
     counts["dim_dataset"] = _count(con, "dim_dataset")
 
     _build_dim_label(con)
@@ -247,37 +251,57 @@ def _build_dim_topic(con: duckdb.DuckDBPyConnection, topic_map: TopicMap) -> Non
 
 
 def _build_dim_dataset(
-    con: duckdb.DuckDBPyConnection, specs: dict[str, DatasetSpec]
+    con: duckdb.DuckDBPyConnection,
+    specs: dict[str, DatasetSpec],
+    sources: dict[str, Any] | None = None,
 ) -> None:
-    from dwm.ingest.staging import stage_table_name
+    """Fill dim_dataset for the v1 datasets and, when present, the v2 sources.
 
-    for i, code in enumerate(sorted(specs), start=1):
+    Keys are assigned by sorting the codes, so adding `stocks` and `meta`
+    renumbers `toi` from 3 to 5. That is safe because dataset_keys() reads the
+    keys back out of this table rather than hard-coding them, which is exactly
+    the failure that once pointed every headline at the wrong source.
+    """
+
+    rows: list[tuple[Any, ...]] = []
+    ordered: list[tuple[str, tuple[Any, ...]]] = []
+    for code in sorted(specs):
         spec = specs[code]
-        table = stage_table_name(code)
-        staged = 0
-        if con.execute(
-            "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [table]
-        ).fetchone()[0]:
-            staged = int(con.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
-        con.execute(
-            """
-            INSERT INTO dim_dataset VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                i,
-                code,
-                spec.name,
-                spec.url,
-                str(spec.local_path()),
-                spec.citation,
-                spec.license,
-                spec.provenance,
-                spec.is_labelled,
-                spec.declared_date_precision,
-                spec.expected_rows,
-                staged,
-            ],
+        ordered.append(
+            (code, (
+                spec.name, spec.url, str(spec.local_path()),
+                spec.citation, spec.license, spec.provenance,
+                spec.is_labelled, spec.declared_date_precision,
+                spec.expected_rows, _staged_rows(con, f"stg_{code}"),
+            ))
         )
+    for code in sorted(sources or {}):
+        spec = (sources or {})[code]
+        note = " ".join(filter(None, [spec.limitation, spec.notes]))
+        ordered.append(
+            (code, (
+                spec.name, spec.url or spec.url_template,
+                str(spec.local_dir()), spec.citation, spec.license, note,
+                False, "day", None, _staged_rows(con, f"stg_{code}"),
+            ))
+        )
+    # Keys follow the sorted order across BOTH sets together, so the key a code
+    # gets depends on the full set. dataset_keys() reads them back from here.
+    ordered.sort(key=lambda pair: pair[0])
+    rows = [(i, code, *body) for i, (code, body) in enumerate(ordered, start=1)]
+    _insert_many(
+        con,
+        "INSERT INTO dim_dataset VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        rows,
+    )
+
+
+def _staged_rows(con: duckdb.DuckDBPyConnection, table: str) -> int:
+    if not con.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [table]
+    ).fetchone()[0]:
+        return 0
+    return int(con.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
 
 
 def _build_dim_label(con: duckdb.DuckDBPyConnection) -> None:

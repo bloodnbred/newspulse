@@ -23,7 +23,12 @@ from typing import Any
 
 import duckdb
 
-from dwm.config import Settings, load_datasets_config, load_topic_map
+from dwm.config import (
+    Settings,
+    load_datasets_config,
+    load_sources_config,
+    load_topic_map,
+)
 from dwm.db import connect
 from dwm.etl.clean import build_clean
 from dwm.etl.dates import register_date_functions
@@ -88,7 +93,12 @@ def run_etl(
         register_date_functions(con, specs["ifnd"])
 
         with step("build dimensions") as dim_info:
-            counts = build_dims(con, topic_map=topic_map, specs=specs)
+            # The v2 sources are passed through so dim_dataset carries `stocks`
+            # and `meta` with their provenance. Without them fact_stock_daily
+            # has no dataset_key to point at.
+            counts = build_dims(
+                con, topic_map=topic_map, specs=specs, sources=load_sources_config()
+            )
             dim_info["row_counts"] = counts
 
         with step("build clean tables"):

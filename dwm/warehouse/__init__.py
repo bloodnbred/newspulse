@@ -57,6 +57,10 @@ def run_build(settings: Settings, *, con: duckdb.DuckDBPyConnection | None = Non
         # exactly as it did before v2 rather than failing on a missing dataset.
         stock_dims = _build_v2_dims(con)
 
+        # fact_stock_daily needs stg_stocks, so it is skipped with a warning
+        # on a v1-only run rather than failing the whole build.
+        stock_daily = _build_stock_facts(con)
+
         gates = check_gates(con, strict=False)
         for name, n in facts.items():
             log.info("%s: %s rows", name, human_int(n))
@@ -65,11 +69,39 @@ def run_build(settings: Settings, *, con: duckdb.DuckDBPyConnection | None = Non
             "facts": facts,
             "cubes": cubes,
             "stock_dims": stock_dims,
+            "stock_daily": stock_daily,
             "gates": gates,
         }
     finally:
         if owned:
             con.close()
+
+
+def _build_stock_facts(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
+    from dwm.warehouse import stock_facts
+
+    if not con.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_name = 'stg_stocks'"
+    ).fetchone()[0]:
+        log.info(
+            "fact_stock_daily skipped: run "
+            "`python -m dwm ingest --dataset stocks` first"
+        )
+        return {"built": False}
+
+    with step("build fact_stock_daily"):
+        counts = stock_facts.build_stock_daily(con)
+    from dwm.warehouse import quality
+
+    report = quality.write(con)
+    return {
+        "built": True,
+        **counts,
+        "check": stock_facts.check(con),
+        "coverage": stock_facts.coverage(con),
+        "top_outliers": stock_facts.outlier_rows(con, limit=10),
+        "quality_report": report,
+    }
 
 
 def _build_v2_dims(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
