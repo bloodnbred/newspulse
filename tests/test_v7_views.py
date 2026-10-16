@@ -54,6 +54,7 @@ def client():
 
 V2_CHARTS = [
     "v2_market_mood",
+    "v2_market_price",
     "v2_stock_price",
     "v2_sector_heatmap",
     "v2_event_car",
@@ -184,28 +185,66 @@ def test_the_drill_across_payload_stays_small_enough_to_load() -> None:
         assert caption, f"{grain} grain caption is empty"
 
 
-def test_rolling_up_divides_at_query_time_not_by_averaging_averages(con) -> None:
+def test_rolling_up_weights_a_mean_by_the_observations_behind_it(con) -> None:
     """Rule 16, and the arithmetic that makes it true.
 
-    A month of five sessions and a month of twenty must not contribute equally
-    to the monthly mean return. The roll-up sums the stock-day observations and
-    divides once, which is the only version that equals the cube.
+    A day covering two stocks and a day covering eight must not contribute
+    equally to the month's mean return. The roll-up multiplies each daily mean
+    by its `stock_obs` and divides once at the end.
+
+    The row shape here is the REAL one from `drill_across_sector` - which
+    returns `mean_return_pct`, not `sum_return`. An earlier version of this test
+    fed `sum_return`, and `drill_across_sector` does not provide it, so the
+    function quietly produced 0.0 for all 61 months and the test passed anyway.
+    Feeding a shape the production query never emits is how a zero arrives in a
+    chart and nothing goes red.
     """
     from dwm.api.v2 import _by_grain
 
     rows = [
-        {"session": "2020-01-01", "news_count": 1.0, "sum_return": 10.0,
+        {"session": "2020-01-01", "sector": "Energy", "news_count": 1.0,
+         "mean_return_pct": 10.0, "mean_abs_return_pct": 10.0,
          "stock_obs": 1, "sum_sentiment": 0.1},
-        {"session": "2020-01-31", "news_count": 3.0, "sum_return": 20.0,
+        {"session": "2020-01-31", "sector": "Energy", "news_count": 3.0,
+         "mean_return_pct": 20.0 / 3, "mean_abs_return_pct": 20.0 / 3,
          "stock_obs": 3, "sum_sentiment": 0.3},
     ]
     rolled, _ = _by_grain(rows, "month")
     assert len(rolled) == 1
     month = rolled[0]
-    # 30.0 over 4 stock-days is 7.5, not the mean of 10 and 6.667 (which is 8.33).
+    # (10.0 x 1 + 6.667 x 3) / 4 = 7.5, not the mean of the two daily means (8.33).
     assert month["mean_return_pct"] == pytest.approx(7.5)
     assert month["stock_obs"] == 4
     assert month["days"] == 2
+
+
+def test_the_real_drill_across_rows_roll_up_to_non_zero_returns(client) -> None:
+    """The guard against the shape mismatch above, run against real output.
+
+    `_by_grain` returning an all-zero return column is invisible: the chart
+    draws, the caption says "61 months, averaged", and the price panel is simply
+    a flat line. Asserting that a real roll-up has a non-zero spread catches the
+    whole class, whatever key the function happens to read.
+    """
+    from dwm.api.v2 import _by_grain, _reading
+    from dwm.olap import sector_ops
+
+    with _reading() as con:
+        raw = sector_ops.run_operation(con, "drill_across_sector", lag=0)["rows"]
+    assert raw, "no drill-across rows to roll up"
+
+    rolled, caption = _by_grain(raw, "month")
+    returns = [r["mean_return_pct"] for r in rolled if r["mean_return_pct"] is not None]
+    assert returns, "every rolled-up return is null"
+    assert any(v != 0 for v in returns), (
+        "every rolled-up return is 0.0, so the price panel of the market-mood "
+        "chart draws as a flat line and nothing raises"
+    )
+    assert max(returns) - min(returns) > 0.1, (
+        f"the rolled-up returns barely vary (min {min(returns)}, max "
+        f"{max(returns)}), which usually means the wrong column is being summed"
+    )
+    assert "months" in caption
 
 
 def test_the_day_grain_cap_says_it_is_a_window(con) -> None:
@@ -419,6 +458,219 @@ def test_every_v2_endpoint_the_views_call_exists(client) -> None:
                 f"/{path} reports 503 without naming the command to run"
             )
     assert template_paths, "no template paths found"
+
+
+# ---------------------------------------------------------------------------
+# concurrency
+# ---------------------------------------------------------------------------
+
+
+def test_parallel_requests_do_not_corrupt_each_other(client) -> None:
+    """Regression guard for the defect only a browser could find.
+
+    FastAPI runs sync endpoints in a threadpool, and the dashboard fires
+    requests in parallel — the mood page hits `/olap/sector/drill-across` and
+    `/ui/v2charts` in a `Promise.all`. Both handlers read the one shared DuckDB
+    handle, and DuckDB's `execute()` returns the connection itself while the row
+    is read by a separate `fetchone()`/`fetchall()`. Two threads interleaving
+    between those two calls produced two failures in the wild:
+
+      * `TypeError: 'NoneType' object is not subscriptable`, and
+      * `ValueError: zip() argument 2 is shorter than argument 1` — which is
+        worse, because it means column names from one query zipped onto rows
+        from another, and the response looks perfectly well-formed.
+
+    Every other test in this file issues its requests one after another, so none
+    of them could see this. That is the whole reason this one exists, and the
+    reason it hammers the same few endpoints from many threads at once.
+    """
+    import concurrent.futures
+
+    paths = [
+        "/stocks",
+        "/sectors",
+        "/events/1/study",
+        "/quality",
+        "/mining/stockclusters",
+        "/olap/sector/drill-across?lag=0",
+        "/ui/v2charts?grain=month&symbol=TCS",
+        "/brief?q=Reliance",
+    ]
+    rounds = 6
+    errors: list[str] = []
+    checked = 0
+
+    def one(path: str) -> tuple[str, int]:
+        return path, client.get(path).status_code
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        jobs = [pool.submit(one, paths[i % len(paths)]) for i in range(len(paths) * rounds)]
+        for job in concurrent.futures.as_completed(jobs):
+            path, status = job.result()
+            checked += 1
+            if status != 200:
+                errors.append(f"{path} -> {status}")
+
+    assert checked == len(paths) * rounds
+    assert not errors, (
+        f"{len(errors)} of {checked} parallel requests failed; the shared DuckDB "
+        f"handle is being interleaved: {sorted(set(errors))}"
+    )
+
+
+def test_a_parallel_response_is_not_built_from_another_querys_rows(client) -> None:
+    """The corruption was silent, so the shape of the answer is checked.
+
+    A response whose keys do not match the keys of the same endpoint's own
+    serial response is a response zipped from the wrong query. Asserting on the
+    status code alone would pass this: the failing responses above were 500s
+    only because the mismatch happened to raise.
+    """
+    import concurrent.futures
+
+    serial = client.get("/sectors").json()
+    expected = set(serial["sectors"][0])
+
+    def one(_: int) -> dict:
+        return client.get("/sectors").json()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        for body in pool.map(one, range(24)):
+            assert body["sectors"], "a concurrent request returned no rows"
+            for row in body["sectors"]:
+                assert set(row) == expected, (
+                    f"a concurrent response has columns {sorted(row)} where a "
+                    f"serial one has {sorted(expected)}"
+                )
+
+
+# ---------------------------------------------------------------------------
+# percentage columns: points vs fractions
+# ---------------------------------------------------------------------------
+
+
+#: `(column name, a value the warehouse really produces, the digits that must
+#: appear on screen)`. These are the columns the front end used to scale wrongly.
+PERCENT_CASES = [
+    ("mean_return_pct", 1.0669, "1.07%"),        # a 1.07% sector day
+    ("mean_abs_return_pct", 23.23, "23.23%"),    # the largest clean single-stock move
+    ("return_pct", 0.0427, "0.04%"),             # v1's own fact_market_daily
+    ("variance_explained_pct", 7.993, "7.99%"),  # v1's regression figure
+    ("risk_signal_rate", 0.034589, "3.46%"),     # a genuine fraction
+    ("dominant_cluster_share", 0.9488, "94.88%"),
+    ("share_of_year", 0.4302, "43.02%"),          # a fraction that does not end in _share
+    ("share_of_window", 0.0064, "0.64%"),
+    ("positive_rate", 0.049761, "4.98%"),
+    ("min_rows_for_a_rate", 1000, "1,000"),       # a threshold, not a percentage
+]
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "expected"), PERCENT_CASES
+)
+def test_a_percentage_column_is_scaled_by_its_own_name(column: str, value: float, expected: str) -> None:
+    """Three different things are called "a percentage" here, and the front end
+    used to treat all three the same way.
+
+    `_pct` columns are ALREADY percentage points - `fact_stock_daily.return_pct`
+    is 1.07 for a 1.07% day. Multiplying those by 100 showed a 1.07% sector day
+    as "106.69%" on the market-mood page and a 7.99% variance as "799.30%" in the
+    v1 findings. `_rate` and `_share` columns really are 0-1 fractions, and
+    `min_rows_for_a_rate` is a row count.
+
+    Run against the real `olapColumns()` from app.js, because the bug was in the
+    formatter rather than in any data.
+    """
+    import re
+
+    # `olapColumns` is not exported, so it is evaluated here by loading app.js as
+    # a module in a stub environment. Everything it touches at definition time is
+    # DOM, so only the function bodies are extracted.
+    source = (STATIC / "app.js").read_text(encoding="utf-8")
+    body = _extract_js_function(source, "olapColumns")
+    harness = f"""
+    function esc(v) {{ return String(v); }}
+    function pct(v, d) {{ return (v * 100).toFixed(d === undefined ? 1 : d) + "%"; }}
+    function num(v) {{ return Number(v).toLocaleString(); }}
+    const dateishSet = new Set(["year","month","year_month","date","full_date","year_no","month_no"]);
+    {body}
+    const cols = olapColumns([{{ "{column}": {value} }}], ["{column}"]);
+    const cell = cols[0];
+    // `html` is null for a column with no special formatter, and `table()` then
+    // renders the raw value through `num()`. Reproduce that so a threshold
+    // column is checked the way it is actually displayed.
+    const out = cell.html ? cell.html({{ "{column}": {value} }})
+                          : num(cell.get ? cell.get({{ "{column}": {value} }}) : {value});
+    process.stdout.write(String(out));
+    """
+    out = _run_node(harness)
+    assert out == expected, (
+        f"{column}={value} rendered as {out!r}, expected {expected!r}"
+    )
+    assert re.search(r"n/a", out) is None
+
+
+def _extract_js_function(source: str, name: str) -> str:
+    """Pull one top-level `function name(...) {...}` out of the JavaScript."""
+    start = source.index(f"function {name}(")
+    depth = 0
+    for i in range(start, len(source)):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start: i + 1]
+    raise AssertionError(f"could not find the end of {name}()")
+
+
+def _run_node(harness: str) -> str:
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "harness.js"
+        path.write_text(harness, encoding="utf-8")
+        result = subprocess.run(
+            ["node", str(path)], capture_output=True, text=True, timeout=60,
+        )
+    if result.returncode != 0:
+        raise AssertionError(f"node failed:\n{result.stderr}")
+    return result.stdout.strip()
+
+
+def test_the_mood_chart_never_puts_two_units_on_one_axis() -> None:
+    """The price series was invisible, which is not the same as wrong-looking.
+
+    Vega-Lite resolves a *layered* chart's y-scale to shared by default, so the
+    news and price series were drawn on one axis. Headline-days run 2 to 6 and
+    mean returns run about 0.01%, so the price line rendered as a flat rule
+    pinned to zero. Nothing in the output said "missing"; it looked like a series
+    that happened not to move.
+
+    Tried twice since. A `vconcat` with independent y-scales fixed the flat line
+    and rendered about 327px wide inside a 1030px card, because a composed spec
+    does not take `width: container` the way a single-view spec does. So they are
+    now two separate charts, which fill the card correctly.
+
+    The test asserts both halves of that: no composed spec anywhere, and both
+    series still present under distinct names.
+    """
+    from dwm.ui.v2_charts import build_v2_charts
+
+    payload = build_v2_charts(mood_rows=_mood_rows())
+    for name, spec in payload.items():
+        if spec.get("dwm_empty"):
+            continue  # a named-empty spec has no frame to size
+        for composed in ("layer", "vconcat", "hconcat", "concat"):
+            assert composed not in spec, (
+                f"{name} is a {composed} spec; a composed spec either shares "
+                f"the y-scale or loses its width"
+            )
+        assert spec.get("width") == "container", f"{name} has no container width"
+
+    assert "v2_market_mood" in payload, "the news series is missing"
+    assert "v2_market_price" in payload, "the price series is missing"
 
 
 def _mood_rows() -> list[dict]:

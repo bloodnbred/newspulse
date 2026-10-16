@@ -14,6 +14,8 @@ v1 routes are untouched. Every endpoint here follows the same three rules:
 
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -35,6 +37,25 @@ MAX_HEADLINES = 50
 
 _CON = None
 
+#: One reader at a time on the shared handle.
+#:
+#: This exists because of a bug only a browser could find. FastAPI runs sync
+#: endpoints in a threadpool, and the dashboard fires several requests at once -
+#: `Promise.all` on the mood page hits `/olap/sector/drill-across` and
+#: `/ui/v2charts` simultaneously. DuckDB's `execute()` returns the connection
+#: itself and the result is read afterwards by `fetchone()`/`fetchall()`, so two
+#: threads interleave between those two calls and one of them reads the OTHER
+#: one's row. It surfaced as `TypeError: 'NoneType' object is not
+#: subscriptable` from inside `_has`, on a page that loads fine when the two
+#: requests happen to be issued one after the other.
+#:
+#: Per-request connections are not the fix, and were already ruled out: DuckDB
+#: caches connection objects per database path, which is why closing a handle per
+#: request used to break every other holder. One shared handle plus a lock is the
+#: arrangement that is actually safe. Queries here are milliseconds against a
+#: local snapshot, so serialising them costs nothing a reader can perceive.
+_LOCK = threading.RLock()
+
 
 def _con():
     """One long-lived read-only handle on the API snapshot.
@@ -45,6 +66,8 @@ def _con():
     "Connection already closed". So the handle is created once and kept for the
     life of the process, which is also what the snapshot exists for: the API
     holds a read-only copy open while the CLI keeps writing the real warehouse.
+
+    Callers must hold `_LOCK` for the whole execute-then-read sequence.
     """
     global _CON
     if _CON is None:
@@ -58,10 +81,23 @@ def _reset_connection() -> None:
     _CON = None
 
 
+@contextmanager
+def _reading():
+    """Hold the shared handle for one complete read.
+
+    The whole query, not just the `execute()` call: the result is read in a
+    separate call, and locking only the first half is what let two requests
+    interleave in the first place.
+    """
+    with _LOCK:
+        yield _con()
+
+
 def _rows(sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
-    cur = _con().execute(sql, params or [])
-    columns = [d[0] for d in cur.description]
-    return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+    with _reading() as con:
+        cur = con.execute(sql, params or [])
+        columns = [d[0] for d in cur.description]
+        return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
 
 
 def _one(sql: str, params: list[Any] | None = None) -> dict[str, Any] | None:
@@ -80,12 +116,18 @@ def _missing(table: str, command: str) -> HTTPException:
 
 
 def _require(table: str, command: str) -> None:
-    present = _con().execute(
-        "SELECT count(*) FROM information_schema.tables WHERE table_name = ?",
-        [table],
-    ).fetchone()[0]
+    present = _has(table)
     if not present:
         raise _missing(table, command)
+
+
+def _has(table: str) -> bool:
+    with _reading() as con:
+        present = con.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = ?",
+            [table],
+        ).fetchone()[0]
+    return bool(present)
 
 
 def _cached(key: str, builder):
@@ -141,7 +183,8 @@ def stock_profile(symbol: str) -> dict[str, Any]:
     from dwm.olap import sector_ops
 
     try:
-        payload = sector_ops.run_operation(_con(), "stock_profile", symbol=symbol)
+        with _reading() as con:
+            payload = sector_ops.run_operation(con, "stock_profile", symbol=symbol)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     payload["caveat"] = (
@@ -174,7 +217,8 @@ def sector_heat(measure: str = Query(default="news_count")) -> dict[str, Any]:
     from dwm.olap import sector_ops
 
     try:
-        result = sector_ops.run_operation(_con(), "sector_pivot", measure=measure)
+        with _reading() as con:
+            result = sector_ops.run_operation(con, "sector_pivot", measure=measure)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
@@ -382,14 +426,19 @@ def brief(q: str = Query(..., min_length=1)) -> dict[str, Any]:
     _require("dim_stock", "python -m dwm ingest --dataset stocks")
     from dwm.inference.brief import build
 
-    return build(_con(), q)
+    with _reading() as con:
+        return build(con, q)
 
 
 @router.get("/insights", tags=["v2"])
 def insights() -> dict[str, Any]:
     from dwm.inference.insights import build
 
-    return _cached("insights", lambda: build(_con()))
+    def run() -> dict[str, Any]:
+        with _reading() as con:
+            return build(con)
+
+    return _cached("insights", run)
 
 
 @router.get("/quality", tags=["v2"])
@@ -397,37 +446,31 @@ def quality() -> dict[str, Any]:
     """The ETL funnel plus mention coverage and the outlier counts."""
     import json
 
-    funnel = []
-    con = _con()
-    rows = con.execute(
-        "SELECT run_id, dataset_code, step, status, rows_read, rows_loaded, "
-        "rows_rejected FROM etl_audit ORDER BY audit_id DESC LIMIT 40"
-    ).fetchall()
-    columns = [
-        "run_id", "dataset_code", "step", "status",
-        "rows_read", "rows_loaded", "rows_rejected",
-    ]
-    funnel = [dict(zip(columns, r, strict=True)) for r in rows]
+    # One locked read for all three queries. They used to run as three separate
+    # unlocked `execute()` calls on the shared handle, which is the interleave
+    # described on `_LOCK`: another request could take the connection between
+    # any two of them.
+    with _reading():
+        funnel = _rows(
+            "SELECT run_id, dataset_code, step, status, rows_read, rows_loaded, "
+            "rows_rejected FROM etl_audit ORDER BY audit_id DESC LIMIT 40"
+        )
 
-    linking = None
-    detail = con.execute(
-        "SELECT detail FROM etl_audit WHERE dataset_code='link' "
-        "AND step='link.quality' ORDER BY audit_id DESC LIMIT 1"
-    ).fetchone()
-    if detail and detail[0]:
-        try:
-            linking = json.loads(detail[0])
-        except json.JSONDecodeError:
-            linking = None
+        linking = None
+        detail = _one(
+            "SELECT detail FROM etl_audit WHERE dataset_code='link' "
+            "AND step='link.quality' ORDER BY audit_id DESC LIMIT 1"
+        )
+        if detail and detail.get("detail"):
+            try:
+                linking = json.loads(detail["detail"])
+            except json.JSONDecodeError:
+                linking = None
 
-    outliers = None
-    if con.execute(
-        "SELECT count(*) FROM information_schema.tables "
-        "WHERE table_name='fact_stock_daily'"
-    ).fetchone()[0]:
-        outliers = con.execute(
-            "SELECT count(*) FROM fact_stock_daily WHERE is_outlier"
-        ).fetchone()[0]
+        outliers = None
+        if _has("fact_stock_daily"):
+            row = _one("SELECT count(*) AS n FROM fact_stock_daily WHERE is_outlier")
+            outliers = row["n"] if row else None
 
     return {
         "funnel": funnel,
@@ -485,9 +528,10 @@ def ui_v2_charts(
             from dwm.olap import sector_ops
 
             try:
-                raw = sector_ops.run_operation(
-                    _con(), "drill_across_sector", sector=sector, lag=lag
-                )["rows"]
+                with _reading() as con:
+                    raw = sector_ops.run_operation(
+                        con, "drill_across_sector", sector=sector, lag=lag
+                    )["rows"]
                 mood, mood_caption = _by_grain(raw, grain)
             except ValueError:
                 mood, mood_caption = [], ""
@@ -495,24 +539,30 @@ def ui_v2_charts(
             # ValueError here would quietly produce an empty heatmap under a
             # title naming the measure the reader asked for, which is worse
             # than an error: it looks like the answer.
-            cube = sector_ops.run_operation(
-                _con(), "sector_pivot", measure=measure
-            )["rows"]
+            with _reading() as con:
+                cube = sector_ops.run_operation(
+                    con, "sector_pivot", measure=measure
+                )["rows"]
 
         if symbol and _has("fact_stock_daily"):
             from dwm.olap import sector_ops
 
             try:
-                points = sector_ops.run_operation(
-                    _con(), "stock_profile", symbol=symbol, peers=False
-                )["rows"]
+                with _reading() as con:
+                    points = sector_ops.run_operation(
+                        con, "stock_profile", symbol=symbol, peers=False
+                    )["rows"]
             except ValueError:
                 points = []
 
         if _has("mining_event_study"):
-            key = event_key or _con().execute(
-                "SELECT max(event_key) FROM mining_event_study WHERE valid"
-            ).fetchone()[0]
+            if event_key:
+                key = event_key
+            else:
+                with _reading() as con:
+                    key = con.execute(
+                        "SELECT max(event_key) FROM mining_event_study WHERE valid"
+                    ).fetchone()[0]
             if key is not None:
                 bars = _rows(
                     """
@@ -609,10 +659,18 @@ def ui_v2_charts(
 def _by_grain(rows: list[dict[str, Any]], grain: str) -> tuple[list[dict[str, Any]], str]:
     """Roll daily drill-across rows up to the requested grain.
 
-    Sums the counts and sums the returns, then divides - the same rule the cubes
-    follow (rule 16: store sums and counts, derive ratios at query time), so an
-    averaged point here is the average over that period's stock-days rather than
-    an average of averages.
+    A mean is never averaged from means. `drill_across_sector` returns
+    `mean_return_pct` per (session, sector) alongside `stock_obs`, the count of
+    stock-days behind it, so the period mean is
+    `sum(mean_return_pct * stock_obs) / sum(stock_obs)` - weighted by the number
+    of observations each daily mean was built from.
+
+    This was silently producing zeros. The first version of this function read a
+    `sum_return` key, which the drill-across does not provide, so every period
+    returned exactly 0.0 and the price panel of the market-mood chart drew as a
+    flat line pinned to zero. Nothing raised; the chart simply had nothing in
+    it. A row carrying a real `sum_return` is still handled, so the function
+    works on either shape.
     """
     from datetime import date
 
@@ -643,30 +701,41 @@ def _by_grain(rows: list[dict[str, Any]], grain: str) -> tuple[list[dict[str, An
 
         bucket = buckets.setdefault(
             key,
-            {
-                "session": key,
-                "news_count": 0.0,
-                "sum_return": 0.0,
-                "stock_obs": 0.0,
-                "sum_sentiment": 0.0,
-                "days": 0,
-            },
+            {"session": key, "news_count": 0.0, "weighted_return": 0.0,
+             "weighted_abs": 0.0, "raw_sum_return": 0.0, "stock_obs": 0.0,
+             "sum_sentiment": 0.0, "days": 0, "has_sum_return": False},
         )
+        obs = float(row.get("stock_obs") or 0)
         bucket["news_count"] += float(row.get("news_count") or 0)
-        bucket["sum_return"] += float(row.get("sum_return") or 0)
-        bucket["stock_obs"] += float(row.get("stock_obs") or 0)
+        bucket["stock_obs"] += obs
         bucket["sum_sentiment"] += float(row.get("sum_sentiment") or 0)
         bucket["days"] += 1
+
+        if row.get("sum_return") is not None:
+            bucket["raw_sum_return"] += float(row["sum_return"])
+            bucket["has_sum_return"] = True
+        elif row.get("mean_return_pct") is not None:
+            # Weighted by the observations behind that daily mean, so a day
+            # covering eight stocks counts for eight, not one.
+            bucket["weighted_return"] += float(row["mean_return_pct"]) * obs
+        if row.get("mean_abs_return_pct") is not None:
+            bucket["weighted_abs"] += float(row["mean_abs_return_pct"]) * obs
 
     out: list[dict[str, Any]] = []
     for key in sorted(buckets):
         b = buckets[key]
         obs = b["stock_obs"]
+        total_return = b["raw_sum_return"] if b["has_sum_return"] else b["weighted_return"]
         out.append(
             {
                 "session": b["session"],
                 "news_count": round(b["news_count"] / b["days"], 1),
-                "mean_return_pct": round(b["sum_return"] / obs, 5) if obs else None,
+                "mean_return_pct": (
+                    round(total_return / obs, 5) if obs else None
+                ),
+                "mean_abs_return_pct": (
+                    round(b["weighted_abs"] / obs, 5) if obs else None
+                ),
                 "sum_sentiment": round(b["sum_sentiment"], 3),
                 "stock_obs": int(obs),
                 "days": b["days"],
@@ -686,15 +755,6 @@ def _latest_news_year() -> int:
     """
     row = _one("SELECT max(year) AS y FROM cube_sector_month")
     return int(row["y"]) if row and row["y"] else 2015
-
-
-def _has(table: str) -> bool:
-    return bool(
-        _con().execute(
-            "SELECT count(*) FROM information_schema.tables WHERE table_name = ?",
-            [table],
-        ).fetchone()[0]
-    )
 
 
 def _guard(fn):
@@ -747,7 +807,11 @@ def olap_sector(
     year: int | None = None,
     quarter: int | None = None,
     month: int | None = None,
-    level: str = Query(default="month", pattern="^(month|quarter|year)$"),
+    # Default matches `sector_rollup`'s own default. It used to be "month",
+    # which the roll-up refuses - it rolls months UP to quarters or years, so
+    # "month" is not a level it can roll up to. The mismatch made every
+    # unparameterised call a 400, which is what the Sector Cube page does.
+    level: str = Query(default="year", pattern="^(quarter|year)$"),
     measure: str = Query(default="news_count"),
     lag: int = Query(default=0, ge=-5, le=5),
     include_market_reports: bool = False,
@@ -815,9 +879,10 @@ def olap_sector(
             wanted = {"symbol": symbol}
 
         usable = {k: v for k, v in wanted.items() if v is not None}
-        result = sector_ops.run_operation(
-            _con(), SECTOR_OPERATIONS[operation], **usable
-        )
+        with _reading() as con:
+            result = sector_ops.run_operation(
+                con, SECTOR_OPERATIONS[operation], **usable
+            )
         return {
             **result,
             "caveat": OPERATION_CAVEATS[operation],
@@ -866,7 +931,8 @@ def check(payload: dict[str, Any]) -> dict[str, Any]:
     from dwm.inference.checker import build_response
 
     measures = TextScorer().measure(text)
-    return build_response(_con(), text, measures, truncated=truncated)
+    with _reading() as con:
+        return build_response(con, text, measures, truncated=truncated)
 
 
 __all__ = ["router"]

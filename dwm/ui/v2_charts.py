@@ -52,11 +52,27 @@ def _frame(spec: dict[str, Any], t: dict[str, Any]) -> dict[str, Any]:
 
     Applied centrally rather than at each call site because seven call sites is
     seven chances to be inconsistent, and the failure is invisible.
+
+    It also recurses into composed specs. A top-level `width` does NOT reach the
+    children of a `vconcat`/`hconcat`/`layer`: the market-mood chart rendered its
+    two panels at Vega's default width inside a full-width card, which looked like
+    a layout mistake rather than a missing property.
     """
     spec["width"] = "container"
     spec["autosize"] = {"type": "fit", "contains": "padding"}
     spec["config"] = _config(t)
     spec["dwm_theme"] = t["name"]
+
+    # A concat's children must NOT declare their own width. The top-level
+    # `width: container` is what measures the card, and a child repeating it
+    # makes each panel measure the same box the parent is already measuring -
+    # which collapsed the market-mood chart to about 60px wide. Children of a
+    # concat inherit the parent's width; only a nested `layer` or `spec`, which
+    # is its own view, needs its own.
+    for key in ("layer", "spec"):
+        for child in spec.get(key) or []:
+            if isinstance(child, dict) and "width" in child:
+                _frame(child, t)
     return spec
 
 
@@ -83,19 +99,53 @@ def market_mood(
     t: dict[str, Any],
     caption: str = "",
     lag: int = 0,
-) -> dict[str, Any]:
-    """News count and sector return on one time axis.
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """News count and sector return, as TWO charts sharing one grain.
 
-    Two scales on one axis pair is the classic drill-across picture, and the
-    usual way it misleads: two y-axes can be scaled so any two series look
-    correlated. Here the series are not independently rescaled, and the caption
-    states the lag being shown, so the reader is comparing SHAPE and should
-    read the caption before drawing a conclusion from it.
+    Two separate specs rather than one composed spec, and that is the third
+    attempt at this chart. The two that failed are worth recording.
+
+    First it was a `layer`, which Vega-Lite resolves to a SHARED y-scale by
+    default: returns of about 0.01% were plotted against headline-days of 2 to 6
+    and drew as a line pinned flat to zero. Nothing looked broken. The series
+    was simply absent, and the one thing a drill-across chart exists to show was
+    missing from it.
+
+    Then it was a `vconcat` with independent y-scales, which fixed the flat line
+    and broke the width instead. A `vconcat` carrying `width: container` at the
+    top level rendered its panels about 327px wide inside a 1030px card; putting
+    `width: container` on the children as well collapsed the whole chart to
+    roughly 60px. Vega's responsive sizing for composed specs does not compose
+    with itself here.
+
+    Two ordinary charts fill the card correctly - the twelve v1 charts have done
+    so all along - and each carries its own axis title and caption, so the
+    reader is never left inferring which panel is which. Two independently
+    scaled axes overlaid on one frame would be worse: those can be stretched so
+    that any two series appear correlated, which is the easiest way in the
+    discipline to manufacture a finding out of nothing.
+
+    Returns a tuple, so the caller registers both under distinct names and
+    `chart()` mounts each in its own card.
     """
     if not rows:
-        return _empty(t, "no sector-day rows; run `python -m dwm link`")
+        why = "no sector-day rows; run `python -m dwm link`"
+        return _empty(t, why), _empty(t, why)
 
     frame = alt.Data(values=rows)
+    summary = caption or f"{len(rows):,} sessions"
+    lag_note = (
+        "news and price on the same session"
+        if lag == 0
+        else f"news SHIFTED {abs(lag)} session(s) "
+             f"{'later' if lag > 0 else 'earlier'} than price"
+    )
+    caution = (
+        f"Drill-across: {lag_note}. The two panels share a time axis but NOT a "
+        f"scale, so only the SHAPE of each series can be compared - never the "
+        f"height of one against the other. News volume is not sentiment, and a "
+        f"shared time axis is not a causal claim."
+    )
 
     news = alt.Chart(frame).mark_line(color=t["accent"], strokeWidth=1.6).encode(
         x=alt.X("session:T", title="Period", axis=_axis(t)),
@@ -111,41 +161,31 @@ def market_mood(
             alt.Tooltip("stock_obs:Q", title="Stock-days priced"),
         ],
     )
+    news_spec = news.properties(height=230).configure_view(stroke=None).to_dict()
 
     price = alt.Chart(frame).mark_line(
-        color=t["muted"], strokeWidth=1.2, strokeDash=[3, 2]
+        color=t["muted"], strokeWidth=1.3, strokeDash=[4, 2]
     ).encode(
-        x=alt.X("session:T", axis=_axis(t)),
+        x=alt.X("session:T", title="Period", axis=_axis(t)),
         y=alt.Y(
             "mean_return_pct:Q",
             title="Mean return, %",
             axis=_axis(t, title=None),
-            scale=alt.Scale(zero=False),
         ),
         tooltip=[
             alt.Tooltip("session:T", title="Period"),
             alt.Tooltip("mean_return_pct:Q", title="Mean return %", format="+.3f"),
+            alt.Tooltip(
+                "mean_abs_return_pct:Q", title="Mean |return| %", format=".3f"
+            ),
         ],
     )
+    price_spec = price.properties(height=230).configure_view(stroke=None).to_dict()
 
-    layered = (news + price).properties(height=300).configure_view(stroke=None)
-    spec = layered.to_dict()
-    spec["config"] = _config(t)
-    spec["dwm_theme"] = t["name"]
-    spec["dwm_caption"] = caption or f"{len(rows):,} sessions"
-    lag_note = (
-        "news and price on the same session"
-        if lag == 0
-        else f"news SHIFTED {abs(lag)} session(s) "
-             f"{'later' if lag > 0 else 'earlier'} than price"
+    return (
+        _final(news_spec, t, summary, caution),
+        _final(price_spec, t, summary, caution),
     )
-    spec["dwm_caution"] = (
-        f"Drill-across: {lag_note}. News is the accent, price is the recessive "
-        f"line. Different units on one time axis, so only the SHAPE is being "
-        f"compared. News volume is not sentiment, and neither one moves the "
-        f"other in any way this chart can show."
-    )
-    return spec
 
 
 # ---------------------------------------------------------------------------
@@ -483,8 +523,10 @@ def build_v2_charts(
     load" and say which.
     """
     t = theme(theme_name)
+    mood_news, mood_price = market_mood(mood_rows or [], t, mood_caption, lag)
     charts: dict[str, Any] = {
-        "v2_market_mood": market_mood(mood_rows or [], t, mood_caption, lag),
+        "v2_market_mood": mood_news,
+        "v2_market_price": mood_price,
         "v2_stock_price": stock_price(stock_points or [], t, symbol),
         "v2_sector_heatmap": sector_heatmap(cube_rows or [], t, measure),
         "v2_event_car": event_car(event_bars or [], t),

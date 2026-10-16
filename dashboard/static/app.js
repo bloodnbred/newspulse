@@ -364,7 +364,28 @@ function olapColumns(rows, columns) {
   const dateish = new Set([
     "year_month", "full_date", "date", "year_no", "year", "month_no", "month",
   ]);
-  const rateish = /(rate|share|pct|percent)/i;
+  /* Two different things are called "a percentage" in this project, and
+     multiplying the wrong one by 100 is a 100x error on every return in the
+     dashboard.
+
+     - `_pct` suffix = ALREADY percentage points. `fact_stock_daily.return_pct`
+       is 1.07 for a 1.07% day, and `variance_explained_pct` is 7.993 for 7.99%.
+       These get the % sign appended, never scaled.
+     - `_rate` / `_share` = a FRACTION. `risk_signal_rate` is 0.034 for 3.4%.
+       These get multiplied by 100, which is what `pct()` does.
+
+     The bug this replaces matched all three groups with one regex, so the
+     market-mood table showed a 1.07% sector day as "106.69%" and the v1
+     variance figures as "799.30%". Both read as absurd, which is lucky; the
+     v1 means showed as 11% would not have been.
+
+     A threshold is a third case and matches none of the above: `min_rows_for_a_rate`
+     is 1000, a row count. Formatting it as a rate printed "100000.0%". */
+  const pointsish = /_pct$/i;
+  // `share_of_year`, `share_of_sample` and `share_of_window` are fractions but do
+  // not END in `_share`, so the pattern has to accept `share` as a prefix too.
+  const fractionish = /(^share|_rate$|_share$)/i;
+  const thresholdish = /^(min_|max_|threshold|n_|rows_)/i;
   const moneyish = /^(sum_|mean_|measure_)/;
 
   return raw
@@ -379,7 +400,12 @@ function olapColumns(rows, columns) {
       // the right-align flag.
       const numeric = isNumber && !dateish.has(key);
       let html = null;
-      if (numeric && rateish.test(key)) {
+      if (numeric && thresholdish.test(key)) {
+        html = null;   // a threshold or a count: the plain number is right
+      } else if (numeric && pointsish.test(key)) {
+        // Already in points. `pct()` would multiply by 100 again.
+        html = (r) => (r[key] == null ? "n/a" : `${Number(r[key]).toFixed(2)}%`);
+      } else if (numeric && fractionish.test(key)) {
         html = (r) => (r[key] == null ? "n/a" : pct(r[key], key.includes("share") ? 2 : 2));
       } else if (numeric && moneyish.test(key)) {
         // Not `num(r[key], 4)`: `num` takes one argument, so the precision was

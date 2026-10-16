@@ -114,6 +114,23 @@
       throw error;
     }
   }
+
+  /** Put fetched specs where `chart()` looks for them.
+   *
+   *  `chart()` in app.js resolves a spec out of `state.charts`. v2 fetches its
+   *  specs separately, per page and per query, so without publishing them here
+   *  `chart()` finds nothing and emits its "no data for the current results"
+   *  box - which is exactly what every v2 chart did, and it looks like a data
+   *  problem rather than a wiring one.
+   *
+   *  Must be called BEFORE the HTML that contains `chart(...)` is generated. */
+  function publishSpecs(payload) {
+    if (payload && payload.charts) {
+      state.charts = Object.assign({}, state.charts, payload.charts);
+    }
+    return (payload && payload.charts) || null;
+  }
+
   function clearSpecCache() { specCache.clear(); }
 
   /* ── 1. Overview: Quick Brief + insights feed ─────────────────────────── */
@@ -370,17 +387,23 @@
         const lag = Number($("#mood-lag").value || 0);
         into(out, `<div class="loading">Drilling across news and price…</div>`);
         try {
-          const [{ charts }, study] = await Promise.all([
+          const [specs, study] = await Promise.all([
             loadSpecs({ theme: state.theme, grain, lag, sector }),
             api("/olap/sector/drill-across", { sector, lag }),
           ]);
+          const charts = publishSpecs(specs);
           into(out, `
-            ${chart("v2_market_mood", "Sector news beside sector returns",
-                    "Accent line: headline-days. Dashed grey: mean return across the sector's stocks. " +
-                    "Both on one time axis, different units.",
+            ${chart("v2_market_mood", "Sector news volume",
+                    "Accent line: headline-days in the sector, averaged over each period. " +
+                    "This is the series the study is about.",
                     "Read the shape, not the height. " +
                     (lag === 0 ? "News and price are on the same session here."
                                : `News is shifted ${Math.abs(lag)} session(s) ${lag > 0 ? "later" : "earlier"} than price.`))}
+            ${chart("v2_market_price", "Sector mean return, same periods",
+                    "Dashed grey: mean return across the sector's stocks, weighted by stock-days. " +
+                    "Recessive on purpose - the market is context around the news, not the subject.",
+                    "A separate panel on purpose, not a second axis on the one above. " +
+                    "Compare the shapes; the heights are not comparable.")}
             ${howComputed("Drill-across",
               "`fact_news_sector_daily` and `fact_stock_daily` have different grains and no direct " +
               "path between them. They meet through the conformed trading-date key from " +
@@ -448,9 +471,9 @@
             api("/brief", { q }),
             api("/stocks/" + encodeURIComponent(brief.symbol || q.toUpperCase())),
           ]);
-          const { charts } = await loadSpecs({
+          const charts = publishSpecs(await loadSpecs({
             theme: state.theme, symbol: brief.symbol || q.toUpperCase(),
-          });
+          }));
           into(out, `
             ${brief.kind === "none"
               ? `<div class="callout callout--caution"><span class="callout__label">No match</span>${md(brief.message)}</div>`
@@ -520,12 +543,13 @@
         const measure = $("#cube-measure").value;
         into(out, `<div class="loading">Reading the cube…</div>`);
         try {
-          const [{ charts }, sectors, slice, rollup] = await Promise.all([
+          const [specs, sectors, slice, rollup] = await Promise.all([
             loadSpecs({ theme: state.theme, measure }),
             api("/sectors"),
             api("/olap/sector/slice", { measure }),
             api("/olap/sector/rollup", { measure }),
           ]);
+          const charts = publishSpecs(specs);
           const drilldown = await api("/olap/sector/drilldown", { measure }).catch(() => null);
           into(out, `
             ${chart("v2_sector_heatmap", `Every sector, every year — ${measure.replace(/_/g, " ")}`,
@@ -611,10 +635,11 @@
         const key = Number($("#ev-key").value);
         into(out, `<div class="loading">Fitting the market model for event ${key}…</div>`);
         try {
-          const [{ charts }, study] = await Promise.all([
+          const [specs, study] = await Promise.all([
             loadSpecs({ theme: state.theme, event_key: key }),
             api(`/events/${key}/study`),
           ]);
+          const charts = publishSpecs(specs);
           const excluded = study.excluded || [];
           into(out, `
             ${chart("v2_event_car", "Cumulative abnormal return by sector",
@@ -677,9 +702,10 @@
 
       const loaders = {
         "Stock clusters": async () => {
-          const [{ charts }, d] = await Promise.all([
+          const [specs, d] = await Promise.all([
             loadSpecs({ theme: state.theme }), api("/mining/stockclusters"),
           ]);
+          const charts = publishSpecs(specs);
           const sizes = Object.entries(d.sizes || {});
           into(out, `
             ${chart("v2_cluster_scatter", "Where each stock sits after two principal components",
@@ -722,9 +748,10 @@
             })}`);
         },
         "Direction model": async () => {
-          const [{ charts }, d] = await Promise.all([
+          const [specs, d] = await Promise.all([
             loadSpecs({ theme: state.theme }), api("/mining/direction"),
           ]);
+          const charts = publishSpecs(specs);
           const beats = d.beats_baseline;
           into(out, `
             ${answerBlock({
@@ -834,10 +861,10 @@
           // is fetched with it. Fetched rather than patched in the browser: the
           // band the headline falls in is decided here, and a browser-side
           // calculation would be a number no test could check.
-          const { charts } = await loadSpecs({
+          const charts = publishSpecs(await loadSpecs({
             theme: state.theme,
             headline_score: payload.style.sensational_score,
-          }).catch(() => ({ charts: null }));
+          }).catch(() => ({ charts: null })));
           into(out, renderCheck(payload, charts));
           mountSpecs(charts);
         } catch (error) {
