@@ -49,17 +49,16 @@ def run_build(settings: Settings, *, con: duckdb.DuckDBPyConnection | None = Non
         with step("build fact tables"):
             facts = build_facts(con, run_id=run_id)
 
-        with step("build cubes"):
-            cubes = build_cubes(con)
-
         # v2 dimensions. Skipped with a warning when their staging tables are
         # absent, so a v1-only run (the default `python -m dwm build`) behaves
         # exactly as it did before v2 rather than failing on a missing dataset.
         stock_dims = _build_v2_dims(con)
 
-        # fact_stock_daily needs stg_stocks, so it is skipped with a warning
-        # on a v1-only run rather than failing the whole build.
+        # Before the cubes: cube_sector_month reads v_stock_daily_clean.
         stock_daily = _build_stock_facts(con)
+
+        with step("build cubes"):
+            cubes = build_cubes(con)
 
         gates = check_gates(con, strict=False)
         for name, n in facts.items():

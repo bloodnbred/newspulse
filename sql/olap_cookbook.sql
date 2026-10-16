@@ -1,0 +1,190 @@
+-- OLAP cookbook: the SQL behind every sector operation.
+--
+-- These are the queries `dwm olap` runs, written out so a reader can see and
+-- check them rather than trusting the Python. Each block is followed by the
+-- operation that produces it.
+--
+-- Two conventions run through all of them:
+--
+--   * News is joined to prices through dim_trading_calendar.effective_trading_
+--     date_key, never through a raw publish date. 32.4% of in-window headlines
+--     fall on a day the market was shut, so a raw-date join silently discards a
+--     third of the corpus.
+--   * Means are derived from sums and counts at read time. A cube that stores
+--     an average cannot be rolled up, which is the usual way a cube goes wrong.
+
+-- ---------------------------------------------------------------------------
+-- cube_sector_month (built by `python -m dwm link`)
+-- ---------------------------------------------------------------------------
+-- Keyed by the trading session, not the publish date. Sums and counts only.
+--
+--   SELECT
+--       s.effective_trading_date_key // 10000        AS year,
+--       (s.effective_trading_date_key // 100) % 100  AS month,
+--       s.sector_key,
+--       sum(s.news_count)             AS news_count,
+--       sum(s.news_count_non_market)  AS news_count_non_market,
+--       sum(s.sum_sentiment)          AS sum_sentiment,
+--       sum(s.high_sensational_count) AS high_sensational_count
+--   FROM fact_news_sector_daily s
+--   WHERE s.effective_trading_date_key IS NOT NULL
+--   GROUP BY 1, 2, 3;
+--
+--   SELECT
+--       f.date_key // 10000                        AS year,
+--       (f.date_key // 100) % 100                 AS month,
+--       d.sector_key,
+--       sum(f.return_pct)      AS sum_return,
+--       sum(f.abs_return_pct)  AS sum_abs_return,
+--       count(*)               AS stock_obs,
+--       count(DISTINCT f.trade_date) AS trading_days
+--   FROM v_stock_daily_clean f          -- excludes is_outlier
+--   JOIN dim_stock d ON d.stock_key = f.stock_key
+--   WHERE f.return_pct IS NOT NULL
+--   GROUP BY 1, 2, 3;
+
+-- ---------------------------------------------------------------------------
+-- sector_slice : fix one sector, break down by year
+-- ---------------------------------------------------------------------------
+--   SELECT s.sector_name, c.year,
+--          sum(c.news_count) AS news_count,
+--          sum(c.news_count) AS measure_value
+--   FROM cube_sector_month c
+--   JOIN dim_sector s ON s.sector_key = c.sector_key
+--   WHERE s.sector_name = ?            -- whitelisted, not interpolated
+--   GROUP BY 1, 2;
+
+-- sector mean return, derived rather than stored
+--   SELECT s.sector_name, c.year,
+--          sum(c.sum_return) / nullif(sum(c.stock_obs), 0) AS mean_return_pct
+--   FROM cube_sector_month c
+--   JOIN dim_sector s ON s.sector_key = c.sector_key
+--   GROUP BY 1, 2;
+
+-- ---------------------------------------------------------------------------
+-- sector_dice : fix both a sector set and a year set
+-- ---------------------------------------------------------------------------
+--   SELECT s.sector_name, c.year, sum(c.news_count) AS news_count
+--   FROM cube_sector_month c
+--   JOIN dim_sector s ON s.sector_key = c.sector_key
+--   WHERE s.sector_name IN (?, ?)       -- parameterised
+--     AND c.year IN (?, ?)             -- parameterised
+--   GROUP BY 1, 2;
+
+-- ---------------------------------------------------------------------------
+-- sector_rollup : months up to quarters or years
+-- ---------------------------------------------------------------------------
+-- Because the cube holds sums, this reconciles exactly with the month grain.
+--
+--   SELECT
+--       printf('%04d-Q%d', year, (month - 1) // 3 + 1) AS period,
+--       sum(news_count) AS news_count
+--   FROM cube_sector_month
+--   GROUP BY 1
+--   ORDER BY 1;
+--
+--   -- year:
+--   SELECT printf('%04d', year) AS period, sum(news_count)
+--   FROM cube_sector_month GROUP BY 1 ORDER BY 1;
+
+-- ---------------------------------------------------------------------------
+-- sector_drilldown : year -> quarter -> month -> headlines
+-- ---------------------------------------------------------------------------
+-- Capped at 50 rows (AGENTS.md rule 21). The stocks tag is a list of the names
+-- that appeared; a mention means the word was present, not that the story was
+-- about the company.
+--
+--   SELECT h.publish_date, h.headline_text, t.topic_name,
+--          round(h.sentiment_compound, 4) AS sentiment,
+--          (SELECT string_agg(d.symbol, ', ')
+--             FROM fact_news_stock_mention m
+--             JOIN dim_stock d ON d.stock_key = m.stock_key
+--            WHERE m.headline_id = h.headline_id) AS stocks
+--   FROM fact_headline h
+--   LEFT JOIN dim_topic t ON t.topic_key = h.topic_key
+--   WHERE h.in_window
+--     AND h.publish_date >= make_date(?, 1, 1)
+--     AND h.publish_date <  make_date(?, 1, 1) + INTERVAL 1 YEAR
+--     AND month(h.publish_date) = ?
+--   ORDER BY h.publish_date DESC
+--   LIMIT 50;
+
+-- ---------------------------------------------------------------------------
+-- sector_pivot : sectors down, years across
+-- ---------------------------------------------------------------------------
+-- Aggregated at (sector, year) first, then transposed. Doing this in SQL with
+-- conditional aggregation would nest the measure expression inside a sum(),
+-- which also evaluates a ratio against a row-level denominator rather than an
+-- aggregated one.
+--
+--   SELECT s.sector_name AS sector, c.year, sum(c.news_count) AS measure_value
+--   FROM cube_sector_month c
+--   JOIN dim_sector s ON s.sector_key = c.sector_key
+--   GROUP BY 1, 2;
+
+-- ---------------------------------------------------------------------------
+-- sector_cube : several levels at once, with a totals row
+-- ---------------------------------------------------------------------------
+--   SELECT printf('%04d', year) AS year, NULL AS quarter, NULL AS month,
+--          s.sector_name, sum(news_count)
+--   FROM cube_sector_month c JOIN dim_sector s USING (sector_key)
+--   GROUP BY 1,2,3,4
+--   UNION ALL
+--   SELECT NULL, NULL, NULL, s.sector_name, sum(news_count)
+--   FROM cube_sector_month c JOIN dim_sector s USING (sector_key)
+--   GROUP BY 1,2,3,4;
+
+-- ---------------------------------------------------------------------------
+-- drill_across_sector : news beside prices, joined through the calendar
+-- ---------------------------------------------------------------------------
+-- The operation a fact constellation exists for. The two facts have different
+-- grains and no direct path to each other; they meet on the conformed date key.
+--
+-- Lag is applied through a real date rather than by adding to date_key:
+-- 20200131 + 100 is 20200231, which is not a date. The sign is applied
+-- separately because `INTERVAL -1 DAY` is not valid SQL.
+--
+--   WITH news AS (
+--       SELECT effective_trading_date_key AS news_key, sector_key,
+--              news_count_non_market AS news_count, sum_sentiment
+--       FROM fact_news_sector_daily
+--   ),
+--   prices AS (
+--       SELECT f.date_key AS price_key, d.sector_key,
+--              sum(f.return_pct)     / nullif(count(*), 0) AS mean_return_pct,
+--              sum(f.abs_return_pct) / nullif(count(*), 0) AS mean_abs_return_pct,
+--              count(*) AS stock_obs
+--       FROM v_stock_daily_clean f
+--       JOIN dim_stock d ON d.stock_key = f.stock_key
+--       WHERE f.return_pct IS NOT NULL
+--       GROUP BY 1, 2
+--   ),
+--   shifted AS (
+--       SELECT c1.date_key AS session_key, d1.full_date AS session,
+--              c2.date_key AS price_key
+--       FROM dim_trading_calendar c1
+--       JOIN dim_date d1 ON d1.date_key = c1.date_key
+--       LEFT JOIN dim_trading_calendar c2
+--              ON c2.date_key = (SELECT date_key FROM dim_date d2
+--                                 WHERE d2.full_date =
+--                                       d1.full_date - INTERVAL 2 DAY)
+--       WHERE c1.is_trading_day
+--   )
+--   SELECT sh.session, s.sector_name,
+--          coalesce(n.news_count, 0) AS news_count,
+--          round(p.mean_return_pct, 4) AS mean_return_pct,
+--          p.stock_obs
+--   FROM shifted sh
+--   JOIN news n   ON n.news_key = sh.session_key AND n.sector_key IS NOT NULL
+--   JOIN prices p ON p.price_key = sh.price_key
+--   JOIN dim_sector s
+--        ON s.sector_key = n.sector_key AND s.sector_key = p.sector_key
+--   WHERE n.news_count > 0
+--   ORDER BY sh.session, s.sector_name;
+--
+-- Grain is (session, sector). With no sector filter, two sectors active on one
+-- date produce two rows.
+--
+-- Market-report headlines are excluded by default. "Sensex tanks 500 points"
+-- reports a move that has already happened, so including it manufactures the
+-- very correlation the query is looking for.

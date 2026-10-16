@@ -93,6 +93,21 @@ def run_link(
         )
         log.info("linking coverage: %s", result["coverage"])
 
+        # cube_sector_month joins sector news to sector prices, and only now do
+        # both sides exist. `dwm build` skipped it for that reason.
+        from dwm.warehouse.cubes import build_cubes
+
+        with step("build the sector cube") as info:
+            info["cubes"] = build_cubes(con, only=["cube_sector_month"])
+        result["cubes"] = info["cubes"]
+        audit_ids.append(
+            record(
+                con, run_id=run_id, dataset_code="link", step="link.cubes",
+                info=info, status=info["status"],
+                started_at=datetime.now(UTC).replace(tzinfo=None),
+            )
+        )
+
         if not skip_audit_sample:
             with step("write mention audit sample") as info:
                 info.update(

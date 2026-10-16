@@ -559,9 +559,35 @@ DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
 
 
 def list_operations() -> list[dict[str, Any]]:
+    """The v1 topic operations only.
+
+    Deliberately unchanged: tests/test_olap.py pins this to exactly OPERATIONS,
+    and widening it would quietly change a contract callers rely on. Use
+    `list_all_operations()` for the combined v1 + v2 view.
+    """
     return [
         {"name": name, "default_params": DEFAULT_PARAMS.get(name, {})}
         for name in OPERATIONS
+    ]
+
+
+def list_all_operations() -> list[dict[str, Any]]:
+    """Every registered operation, v1 topic family and v2 sector family.
+
+    The CLI and the API's /operations endpoint use this, so a caller sees one
+    flat list rather than two it has to know to combine.
+    """
+    from dwm.olap import sector_ops
+
+    return [
+        {**entry, "family": "topic"} for entry in list_operations()
+    ] + [
+        {
+            "name": name,
+            "default_params": sector_ops.DEFAULT_PARAMS.get(name, {}),
+            "family": "sector",
+        }
+        for name in sector_ops.OPERATIONS
     ]
 
 
@@ -579,10 +605,24 @@ def run_operation(
     renders only the rows shows the reader a table and leaves them to work out
     what it means, which is half a job done. The reading is derived from the
     rows just returned, so it cannot describe something else.
+
+    Sector operations are dispatched to dwm/olap/sector_ops.py. They carry their
+    own descriptions in `description` rather than a readings-module entry, so
+    they return before the v1 reading/chart wiring below.
     """
+    from dwm.olap import sector_ops
+
+    if operation in sector_ops.OPERATIONS:
+        kwargs = dict(sector_ops.DEFAULT_PARAMS.get(operation, {}))
+        kwargs.update(params or {})
+        payload = sector_ops.run_operation(con, operation, **kwargs)
+        log.info("%s: %s rows", operation, human_int(len(payload.get("rows") or [])))
+        return payload
+
     if operation not in OPERATIONS:
         raise KeyError(
-            f"unknown OLAP operation {operation!r}. Known: {sorted(OPERATIONS)}"
+            f"unknown OLAP operation {operation!r}. "
+            f"Known: {sorted(set(OPERATIONS) | set(sector_ops.OPERATIONS))}"
         )
     kwargs = dict(DEFAULT_PARAMS.get(operation, {}))
     kwargs.update(params or {})
@@ -602,11 +642,25 @@ def run_olap(
     settings: Settings, operation: str | None = None, **params: Any
 ) -> dict[str, Any]:
     """Run one named operation, or list them all when none is given."""
+    from dwm.olap import sector_ops
+
     if operation is None:
-        return {"operations": list_operations()}
+        return {"operations": list_all_operations()}
+
+    if operation in sector_ops.OPERATIONS:
+        sector_kwargs = dict(sector_ops.DEFAULT_PARAMS.get(operation, {}))
+        sector_kwargs.update(params)
+        con = connect(settings)
+        try:
+            return sector_ops.run_operation(con, operation, **sector_kwargs)
+        finally:
+            con.close()
 
     if operation not in OPERATIONS:
-        raise KeyError(f"unknown OLAP operation {operation!r}. Known: {sorted(OPERATIONS)}")
+        raise KeyError(
+            f"unknown OLAP operation {operation!r}. "
+            f"Known: {sorted(set(OPERATIONS) | set(sector_ops.OPERATIONS))}"
+        )
 
     con = connect(settings)
     try:
