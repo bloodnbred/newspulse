@@ -441,6 +441,408 @@ def quality() -> dict[str, Any]:
     }
 
 
+@router.get("/ui/v2charts", tags=["ui", "v2"])
+def ui_v2_charts(
+    theme: str = Query(default="light", pattern="^(light|dark)$"),
+    sector: str | None = None,
+    symbol: str | None = None,
+    measure: str = Query(default="news_count"),
+    event_key: int = Query(default=0),
+    grain: str = Query(default="month", pattern="^(day|week|month)$"),
+    lag: int = Query(default=0, ge=-5, le=5),
+    headline_score: float | None = None,
+) -> dict[str, Any]:
+    """Every v2 chart as Vega-Lite specs, in one theme.
+
+    Built in Python for the same reason `/ui/charts` is: a malformed spec is a
+    blank page with no stack trace, whereas here a test can catch it. It also
+    means no dashboard file ever touches a warehouse table.
+
+    `grain` exists because the drill-across fact has 12,775 daily rows. Inlined
+    into a 300px line chart that is a 2.4MB payload and, worse, a solid block
+    of colour - there is no shape to read. Monthly by default, with daily and
+    weekly available, and the caption always names the grain actually used so
+    the reader is never guessing at the resolution.
+
+    Each chart is built independently and a failure in one degrades that chart
+    to a named-empty spec rather than failing the page. A reader who cannot see
+    the cluster scatter still gets the direction-model bars.
+    """
+    from dwm.ui.v2_charts import build_v2_charts
+
+    def run() -> dict[str, Any]:
+        mood: list[dict[str, Any]] = []
+        cube: list[dict[str, Any]] = []
+        points: list[dict[str, Any]] = []
+        bars: list[dict[str, Any]] = []
+        scatter: list[dict[str, Any]] = []
+        direction: list[dict[str, Any]] = []
+        majority: float | None = None
+        yesterday: float | None = None
+        hist: list[dict[str, Any]] = []
+
+        if _has("cube_sector_month"):
+            from dwm.olap import sector_ops
+
+            try:
+                raw = sector_ops.run_operation(
+                    _con(), "drill_across_sector", sector=sector, lag=lag
+                )["rows"]
+                mood, mood_caption = _by_grain(raw, grain)
+            except ValueError:
+                mood, mood_caption = [], ""
+            # An unknown measure is refused, not swallowed. Catching the
+            # ValueError here would quietly produce an empty heatmap under a
+            # title naming the measure the reader asked for, which is worse
+            # than an error: it looks like the answer.
+            cube = sector_ops.run_operation(
+                _con(), "sector_pivot", measure=measure
+            )["rows"]
+
+        if symbol and _has("fact_stock_daily"):
+            from dwm.olap import sector_ops
+
+            try:
+                points = sector_ops.run_operation(
+                    _con(), "stock_profile", symbol=symbol, peers=False
+                )["rows"]
+            except ValueError:
+                points = []
+
+        if _has("mining_event_study"):
+            key = event_key or _con().execute(
+                "SELECT max(event_key) FROM mining_event_study WHERE valid"
+            ).fetchone()[0]
+            if key is not None:
+                bars = _rows(
+                    """
+                    SELECT s.sector_name AS sector, count(*) AS n_stocks,
+                           round(avg(m.car_0_5), 4) AS mean_car_0_5
+                    FROM mining_event_study m
+                    LEFT JOIN dim_sector s ON s.sector_key = m.sector_key
+                    WHERE m.event_key = ? AND m.valid AND m.car_0_5 IS NOT NULL
+                    GROUP BY 1 ORDER BY 2 DESC
+                    """,
+                    [int(key)],
+                )
+
+        if _has("mining_stock_clusters"):
+            scatter = _rows(
+                """
+                SELECT symbol, sector_name AS sector, cluster_id, pc1, pc2,
+                       round(ann_volatility, 3) AS ann_volatility, round(beta, 3) AS beta
+                FROM mining_stock_clusters
+                WHERE pc1 IS NOT NULL AND cluster_id IS NOT NULL
+                ORDER BY cluster_id, symbol
+                """
+            )
+
+        if _has("mining_direction_results"):
+            direction = _rows(
+                "SELECT model, accuracy FROM mining_direction_results "
+                "WHERE accuracy IS NOT NULL ORDER BY accuracy DESC"
+            )
+            best = direction[0] if direction else None
+            if best is not None:
+                row = _one(
+                    "SELECT baseline_majority, baseline_yesterday "
+                    "FROM mining_direction_results WHERE accuracy IS NOT NULL "
+                    "ORDER BY accuracy DESC LIMIT 1"
+                )
+                majority = row["baseline_majority"] if row else None
+                yesterday = row["baseline_yesterday"] if row else None
+
+        if _has("fact_headline"):
+            # Ten equal-width bands over the corpus's OWN score range rather than
+            # an assumed 0-1: the scale is a weighted sum of features and is not
+            # bounded by construction, so fixed bands would put almost every
+            # headline in one bar and make the histogram useless.
+            bounds = _one(
+                "SELECT min(sensational_score) AS lo, max(sensational_score) AS hi "
+                "FROM fact_headline WHERE sensational_score IS NOT NULL"
+            )
+            if bounds and bounds["hi"] is not None and bounds["hi"] > bounds["lo"]:
+                hist = _rows(
+                    """
+                    SELECT least(9, greatest(0, floor(
+                        (? - sensational_score) / ((? - ?) / 10.0)
+                    ))::int) AS bin,
+                    count(*) AS count
+                    FROM fact_headline
+                    WHERE sensational_score IS NOT NULL
+                    GROUP BY 1 ORDER BY 1
+                    """,
+                    [bounds["hi"], bounds["hi"], bounds["lo"]],
+                )
+                width = (bounds["hi"] - bounds["lo"]) / 10.0
+                hist = [
+                    {
+                        "bin": f"{bounds['lo'] + h['bin'] * width:.2f}"
+                               f"-{bounds['lo'] + (h['bin'] + 1) * width:.2f}",
+                        "count": h["count"],
+                    }
+                    for h in hist
+                ]
+
+        charts = build_v2_charts(
+            theme_name=theme,
+            mood_rows=mood,
+            mood_caption=mood_caption,
+            lag=lag,
+            stock_points=points,
+            symbol=symbol or "",
+            cube_rows=cube,
+            measure=measure,
+            event_bars=bars,
+            cluster_points=scatter,
+            direction=direction,
+            majority=majority,
+            yesterday=yesterday,
+            percentile_hist=hist,
+            headline_score=headline_score,
+        )
+        return {"theme": theme, "charts": charts, "count": len(charts)}
+
+    return _guard(run)
+
+
+def _by_grain(rows: list[dict[str, Any]], grain: str) -> tuple[list[dict[str, Any]], str]:
+    """Roll daily drill-across rows up to the requested grain.
+
+    Sums the counts and sums the returns, then divides - the same rule the cubes
+    follow (rule 16: store sums and counts, derive ratios at query time), so an
+    averaged point here is the average over that period's stock-days rather than
+    an average of averages.
+    """
+    from datetime import date
+
+    if grain == "day":
+        # Capped rather than shipped whole. 10,342 daily rows is under the
+        # 100k pagination threshold but still a 2MB payload, and it renders as a
+        # solid block on a 300px chart with no shape to read. The most recent
+        # MAX_DAY_POINTS sessions is the window a reader actually uses, and the
+        # caption says it is a window so nobody reads it as the whole period.
+        MAX_DAY_POINTS = 250
+        total = len(rows)
+        if total > MAX_DAY_POINTS:
+            rows = rows[-MAX_DAY_POINTS:]
+            return rows, f"last {MAX_DAY_POINTS:,} of {total:,} sessions"
+        return rows, f"{total:,} sessions"
+
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        session = row.get("session")
+        if session is None:
+            continue
+        when = session if isinstance(session, date) else date.fromisoformat(str(session))
+        if grain == "month":
+            key = f"{when.year:04d}-{when.month:02d}-01"
+        else:
+            iso = when.isocalendar()
+            key = f"{iso[0]:04d}-W{iso[1]:02d}-1"
+
+        bucket = buckets.setdefault(
+            key,
+            {
+                "session": key,
+                "news_count": 0.0,
+                "sum_return": 0.0,
+                "stock_obs": 0.0,
+                "sum_sentiment": 0.0,
+                "days": 0,
+            },
+        )
+        bucket["news_count"] += float(row.get("news_count") or 0)
+        bucket["sum_return"] += float(row.get("sum_return") or 0)
+        bucket["stock_obs"] += float(row.get("stock_obs") or 0)
+        bucket["sum_sentiment"] += float(row.get("sum_sentiment") or 0)
+        bucket["days"] += 1
+
+    out: list[dict[str, Any]] = []
+    for key in sorted(buckets):
+        b = buckets[key]
+        obs = b["stock_obs"]
+        out.append(
+            {
+                "session": b["session"],
+                "news_count": round(b["news_count"] / b["days"], 1),
+                "mean_return_pct": round(b["sum_return"] / obs, 5) if obs else None,
+                "sum_sentiment": round(b["sum_sentiment"], 3),
+                "stock_obs": int(obs),
+                "days": b["days"],
+            }
+        )
+    label = {"month": "months", "week": "weeks"}[grain]
+    return out, f"{len(out):,} {label}, averaged"
+
+
+def _latest_news_year() -> int:
+    """The most recent year the cube actually holds.
+
+    `sector_drilldown` requires a year and has no useful default, so the API
+    supplies one rather than making the caller guess. Derived from the cube
+    rather than from today's date, because the corpus ends 2020-06-30 and
+    defaulting to the current year would return nothing with no explanation.
+    """
+    row = _one("SELECT max(year) AS y FROM cube_sector_month")
+    return int(row["y"]) if row and row["y"] else 2015
+
+
+def _has(table: str) -> bool:
+    return bool(
+        _con().execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = ?",
+            [table],
+        ).fetchone()[0]
+    )
+
+
+def _guard(fn):
+    """Turn a call's failure modes into status codes.
+
+    A local copy rather than an import from dwm.api.app, because app.py imports
+    this module to register the router: importing it back would be a cycle.
+    Same mapping, so a v2 endpoint fails the way a v1 one does.
+    """
+    try:
+        return fn()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - surfaced to the client
+        log.exception("v2 endpoint failed")
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# sector OLAP operations
+# ---------------------------------------------------------------------------
+
+#: Short URL name -> the name `sector_ops.OPERATIONS` registers it under.
+#:
+#: Kept as an explicit mapping rather than a prefix convention. `sector_ops`
+#: prefixes its operations (`sector_slice`, `sector_pivot`) because they share a
+#: module with other v1 operations; the URL does not need to carry that
+#: disambiguation, and guessing at it with a string rule is how a future rename
+#: silently 404s. An unmapped name is refused, never constructed.
+SECTOR_OPERATIONS = {
+    "slice": "sector_slice",
+    "dice": "sector_dice",
+    "rollup": "sector_rollup",
+    "drilldown": "sector_drilldown",
+    "pivot": "sector_pivot",
+    "cube": "sector_cube",
+    "drill-across": "drill_across_sector",
+    "stock_profile": "stock_profile",
+}
+
+
+@router.get("/olap/sector/{operation}", tags=["olap", "v2"])
+def olap_sector(
+    operation: str,
+    sector: str | None = None,
+    sectors: str | None = None,
+    years: str | None = None,
+    year: int | None = None,
+    quarter: int | None = None,
+    month: int | None = None,
+    level: str = Query(default="month", pattern="^(month|quarter|year)$"),
+    measure: str = Query(default="news_count"),
+    lag: int = Query(default=0, ge=-5, le=5),
+    include_market_reports: bool = False,
+    symbol: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+) -> dict[str, Any]:
+    """Run one sector OLAP operation and return it with its own description.
+
+    The description comes from the operation itself rather than from this
+    handler, so the words under a table always match the SQL that produced it.
+    """
+    if operation not in SECTOR_OPERATIONS:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"unknown operation '{operation}'. Available: "
+                + ", ".join(sorted(SECTOR_OPERATIONS))
+            ),
+        )
+    if not _has("cube_sector_month"):
+        raise _missing("cube_sector_month", "python -m dwm link")
+
+    from dwm.olap import sector_ops
+
+    def run() -> dict[str, Any]:
+        wanted: dict[str, Any] = {}
+        if operation == "slice":
+            wanted = {
+                "sector": sector, "measure": measure, "year": year,
+                "include_market_reports": include_market_reports,
+            }
+        elif operation == "dice":
+            # Both lists default to empty, which the operation reads as "all".
+            # `sectors` arrives as one comma-separated query parameter because
+            # that is what a form can send; it is split here rather than in the
+            # operation, which takes real lists.
+            wanted = {
+                "sectors": [s.strip() for s in (sectors or "").split(",") if s.strip()],
+                "years": [int(y) for y in (years or "").split(",") if y.strip()],
+                "measure": measure,
+                "include_market_reports": include_market_reports,
+            }
+        elif operation == "rollup":
+            wanted = {"level": level, "measure": measure, "sector": sector}
+        elif operation == "drilldown":
+            # `sector_drilldown` takes year (required), optional quarter/month
+            # and an optional sector. It has no `measure`: the drill-down shows
+            # the individual facts, not a measure total.
+            wanted = {
+                "sector": sector,
+                "year": year if year is not None else _latest_news_year(),
+                "quarter": quarter,
+                "month": month,
+            }
+        elif operation == "pivot":
+            wanted = {"measure": measure, "year": year}
+        elif operation == "cube":
+            wanted = {}
+        elif operation == "drill-across":
+            wanted = {
+                "sector": sector, "lag": lag,
+                "include_market_reports": include_market_reports,
+            }
+        else:  # stock_profile
+            wanted = {"symbol": symbol}
+
+        usable = {k: v for k, v in wanted.items() if v is not None}
+        result = sector_ops.run_operation(
+            _con(), SECTOR_OPERATIONS[operation], **usable
+        )
+        return {
+            **result,
+            "caveat": OPERATION_CAVEATS[operation],
+        }
+
+    return _guard(run)
+
+
+OPERATION_CAVEATS = {
+    "slice": "Rows are sums and counts; any mean shown is divided here, not stored.",
+    "dice": "An empty sector or year list means 'all', which is a different query from an "
+            "explicit list and can return a different row count.",
+    "rollup": "A roll-up must equal the cube it came from. The response reports whether it does.",
+    "drilldown": "Limited to the most recent facts in one sector-period. Truncated, not sampled.",
+    "pivot": "Cells are means derived from sums and counts, so they can be added up correctly.",
+    "cube": "The stored rows, unaltered, so the arithmetic above can be checked by hand.",
+    "drill-across": "Two grains joined on the conformed trading-date key. `lag` shifts the news "
+                    "side relative to price, which is the only way to see whether news leads "
+                    "price or merely coincides with it. Market-report headlines are excluded by "
+                    "default because they describe a move that already happened.",
+    "stock_profile": "Returns are percentage points from adjusted closes. A mention means the name "
+                     "appeared, not that the story was about it.",
+}
+
+
 @router.post("/check", tags=["v2"])
 def check(payload: dict[str, Any]) -> dict[str, Any]:
     """Score a pasted headline: style signals, percentile, neighbours, tags."""

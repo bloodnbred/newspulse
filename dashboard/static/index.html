@@ -87,5 +87,9 @@
 <script src="https://cdn.jsdelivr.net/npm/vega-embed@7"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@12"></script>
 <script src="/app.js"></script>
+<!-- v2 views. Loaded after app.js because they reuse its helpers (api, chart,
+     table, tabs, esc, md, state) rather than reimplementing them, and they
+     register on window.DWM_V2 for render() to call. -->
+<script src="/v2.js"></script>
 </body>
 </html>

@@ -41,12 +41,23 @@ const QUESTIONS = [
   { id: "classifier", rq: "RQ7", nav: "Real vs Fake",           title: "The real/fake classifier" },
 ];
 
+/* Sections. The v1 five answer the seven research questions about the news
+   corpus itself; the v2 four answer what that corpus says about companies,
+   sectors and markets. They are grouped in the nav so a reader can tell which
+   half of the study a page belongs to. */
 const SECTIONS = [
-  { id: "overview", glyph: "◧", label: "Overview" },
-  { id: "findings", glyph: "◇", label: "Findings" },
-  { id: "explore",  glyph: "⌗", label: "Explore" },
-  { id: "how",      glyph: "⚙", label: "How it works" },
-  { id: "report",   glyph: "▤", label: "Full report" },
+  { id: "overview", glyph: "◧", label: "Overview", group: "The news" },
+  { id: "findings", glyph: "◇", label: "Findings", group: "The news" },
+  { id: "explore",  glyph: "⌗", label: "Explore",  group: "The news" },
+  { id: "mood",     glyph: "↯", label: "Market mood", group: "News and markets" },
+  { id: "stocks",   glyph: "⌸", label: "Stocks", group: "News and markets" },
+  { id: "cube",     glyph: "▦", label: "Sector cube", group: "News and markets" },
+  { id: "events",   glyph: "⊕", label: "Event study", group: "News and markets" },
+  { id: "mining",   glyph: "⌬", label: "Mining lab", group: "News and markets" },
+  { id: "checker",  glyph: "⌕", label: "Checker", group: "About the data" },
+  { id: "quality",  glyph: "⚖", label: "Data & schema", group: "About the data" },
+  { id: "how",      glyph: "⚙", label: "How it works", group: "About the data" },
+  { id: "report",   glyph: "▤", label: "Full report", group: "About the data" },
 ];
 
 const SECTIONS_OF_QUESTION = {
@@ -1422,10 +1433,17 @@ function downloadCsv(rows, name) {
 /* ── navigation and routing ────────────────────────────────────────────── */
 
 function renderNav() {
+  // Grouped, so the sidebar reads as three parts of one study rather than
+  // twelve undifferentiated links. The group heading is skipped for the first
+  // group, which sits directly under the brand.
+  const seen = new Set();
   $("#nav-main").innerHTML = SECTIONS.map((s) => {
     const active = state.route.page === s.id ? " is-active" : "";
     const tag = s.id === "findings" ? '<span class="navlink__tag">7</span>' : "";
-    return `<button class="navlink${active}" data-page="${s.id}">
+    const heading = seen.has(s.group)
+      ? ""
+      : (seen.add(s.group), s.group === SECTIONS[0].group ? "" : `<div class="navgroup">${esc(s.group)}</div>`);
+    return `${heading}<button class="navlink${active}" data-page="${s.id}">
       <span class="navlink__glyph">${s.glyph}</span>
       <span class="navlink__label">${esc(s.label)}</span>${tag}
     </button>`;
@@ -1451,8 +1469,19 @@ function renderTopbar() {
   const page = SECTIONS.find((s) => s.id === state.route.page);
   $("#page-title").textContent = page ? page.label : "Overview";
 
+  const PAGE_SUBTITLE = {
+    mood: "Drill-across: two fact tables at different grains, joined on the conformed trading-date key.",
+    stocks: "One company at a time. Prices and coverage, with the limits of both stated.",
+    cube: "Sector by year, sliced and rolled up. Sums and counts, never stored averages.",
+    events: "Cumulative abnormal return around a known date, with the excluded rows shown too.",
+    mining: "Patterns across the whole window, each beside the thing that would undermine it.",
+    checker: "Scores the writing, not the claim. A high style score is not evidence of falsehood.",
+    quality: "What went into this warehouse, what was rejected, and what nobody has audited yet.",
+  };
   let sub = state.manifest.subtitle || "";
-  if (state.route.page === "findings") {
+  if (PAGE_SUBTITLE[state.route.page]) {
+    sub = PAGE_SUBTITLE[state.route.page];
+  } else if (state.route.page === "findings") {
     const q = QUESTIONS.find((x) => x.id === state.route.sub) || QUESTIONS[0];
     sub = `Each page states its answer first. The evidence is underneath, and the caveat sits ` +
           `with the number rather than in a footnote. — ${q.rq}, ${q.title}`;
@@ -1534,12 +1563,23 @@ function render() {
 
   const view = $("#view");
   let html;
+  // The v2 views live in v2.js so app.js does not double in size, and so a
+  // syntax error in one file cannot stop the other booting. They are called
+  // through DWM_V2 rather than imported, because there is no build step here.
+  const V2 = window.DWM_V2;
   switch (state.route.page) {
     case "findings": html = pageFindings(state.route.sub); break;
     case "explore":  html = pageExplore(); break;
     case "how":      html = pageHow(); break;
     case "report":   html = pageReport(); break;
     default:         html = pageOverview();
+  }
+  // Overview carries the v2 Quick Brief and insights feed above the v1 summary,
+  // because the brief is the most likely first question a visitor has.
+  if (V2 && V2.pageOverview && state.route.page === "overview") {
+    html = V2.pageOverview() + html;
+  } else if (V2 && V2["page" + state.route.page.charAt(0).toUpperCase() + state.route.page.slice(1)]) {
+    html = V2["page" + state.route.page.charAt(0).toUpperCase() + state.route.page.slice(1)]();
   }
   view.innerHTML = html;
   mountCharts();
@@ -1768,6 +1808,11 @@ function applyTheme(name) {
  *  the exact half-light/half-dark failure this dashboard was rewritten to fix. */
 async function toggleTheme() {
   const next = state.theme === "dark" ? "light" : "dark";
+  // v2 caches its specs per query, and every spec embeds the theme it was built
+  // in. Without this the v2 pages would keep rendering light charts on a dark
+  // page - the exact half-light/half-dark failure this dashboard was rewritten
+  // to fix, reintroduced through a cache.
+  if (window.DWM_V2 && window.DWM_V2.clearSpecCache) window.DWM_V2.clearSpecCache();
   applyTheme(next);
   try {
     const data = await api("/ui/charts", { theme: next });

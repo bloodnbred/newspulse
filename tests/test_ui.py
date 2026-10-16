@@ -43,13 +43,31 @@ ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "dashboard" / "static"
 CSS = STATIC / "app.css"
 JS = STATIC / "app.js"
+#: The v2 views. A separate file so app.js stays readable, which means every
+#: check that greps the front end has to consult two files rather than one.
+V2_JS = STATIC / "v2.js"
 HTML = STATIC / "index.html"
 
 FACTS = ROOT / "reports" / "facts.json"
 
+WAREHOUSE = ROOT / "warehouse" / "dwm.duckdb"
+
 
 def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _served_v2_chart_names() -> set[str]:
+    """Chart names the v2 spec builder can produce.
+
+    Derived from the builder's own output rather than hard-coded, so a chart
+    added to `build_v2_charts` is covered here without touching this file. The
+    names are the same with or without data because an empty input still yields
+    a named-empty spec - which is the point: the name is always served.
+    """
+    from dwm.ui.v2_charts import build_v2_charts
+
+    return set(build_v2_charts())
 
 
 def _facts_from_warehouse():
@@ -58,7 +76,7 @@ def _facts_from_warehouse():
     Some checks need the warehouse rather than the checked-in results, because
     they exercise the whole request path. The test session points
     `DWM_REPORTS_DIR` at a temporary directory, so these skip unless the
-    warehouse has been built — with a reason that says what to run.
+    warehouse has been built - with a reason that says what to run.
     """
     from dwm.api import store
 
@@ -66,6 +84,32 @@ def _facts_from_warehouse():
         return store.load_facts()
     except Exception as exc:  # noqa: BLE001 - any failure means "not available"
         pytest.skip(f"needs the built warehouse (`dwm mine`): {exc}")
+
+
+def _all_v1_charts() -> dict:
+    """Every chart the endpoint actually serves.
+
+    Built the way `/ui/charts` builds them, with the same optional inputs. That
+    detail is the whole point of this helper: three of the twelve v1 charts -
+    `rq6_returns`, `rq6_volatility`, `warehouse_rows` - are registered only
+    when market points or table counts are supplied, so a test that calls
+    `build_charts(facts)` alone concludes they are never served and reports a
+    false alarm against working code. Mirroring the endpoint's arguments is
+    what makes the check honest in both directions.
+    """
+    from dwm.api import store
+    from dwm.ui.charts import build_charts
+
+    facts = _facts_from_warehouse()
+    try:
+        points = store.market_daily()["points"]
+    except Exception:  # noqa: BLE001 - a chart that needs no market data
+        points = []
+    try:
+        tables = store.table_counts()
+    except Exception:  # noqa: BLE001
+        tables = []
+    return build_charts(facts, market_points=points, tables=tables)
 
 
 needs_warehouse = pytest.mark.usefixtures("_noop")
@@ -137,12 +181,18 @@ def test_every_chart_the_js_names_is_served() -> None:
     becomes a permanent error message on a live page, so the names are asserted
     against what the endpoint actually returns.
     """
-    from dwm.ui.charts import build_charts
+    from dwm.ui.charts import build_charts  # noqa: F401 - documents the source
 
-    facts = _facts_from_warehouse()
-    served = set(build_charts(facts))
+    served = set(_all_v1_charts())
 
-    named = set(re.findall(r'chart\(\s*"([a-z0-9_]+)"', _text(JS)))
+    # The v2 views live in their own file and their own spec builder, so the
+    # check has to consult both. A v2 chart name with no spec would render the
+    # error box on a live page just as a v1 one would.
+    served |= _served_v2_chart_names()
+
+    named = set(re.findall(r'chart\(\s*"([a-z0-9_]+)"', _text(JS))) | set(
+        re.findall(r'chart\(\s*"([a-z0-9_]+)"', _text(V2_JS))
+    )
     # `__series` is assembled in the browser for the browse view only. It has no
     # published figure behind it, so it has no spec on the server.
     named.discard("__series")
@@ -164,10 +214,12 @@ def test_every_chart_fills_its_frame(theme: str) -> None:
     its card. On the first build every chart on the dashboard did this, and it
     read as missing data rather than as a sizing mistake.
     """
-    from dwm.ui.charts import build_charts
+    from dwm.ui.v2_charts import build_v2_charts
 
-    for name, spec in build_charts(_facts_from_warehouse(), theme_name=theme).items():
-        if not spec:
+    specs = dict(_all_v1_charts())
+    specs.update(build_v2_charts(theme_name=theme))
+    for name, spec in specs.items():
+        if not spec or spec.get("dwm_empty"):
             continue
         blob = json.dumps(spec)
         assert '"width": "container"' in blob, f"{name} ({theme}) has no container width"
@@ -797,30 +849,66 @@ def test_no_figure_in_the_payload_lacks_a_caution() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _axis_encodings(node):
+    """Yield every x/y axis encoding found anywhere in a Vega-Lite spec.
+
+    Recurses because a spec is a tree: a layered chart, a facet, and a repeated
+    chart each bury their encodings at a different depth.
+    """
+    if isinstance(node, list):
+        for item in node:
+            yield from _axis_encodings(item)
+        return
+    if not isinstance(node, dict):
+        return
+    for axis in ("x", "y"):
+        block = node.get(axis)
+        if isinstance(block, dict) and "field" in block:
+            yield axis, block
+    for value in node.values():
+        yield from _axis_encodings(value)
+
+
 def test_nominal_axes_are_sorted_by_their_own_labels() -> None:
-    """A nominal axis with no explicit sort defaults to whatever order the data
-    arrives in.
+    """A nominal axis with no explicit sort defaults to data-arrival order.
 
     The RQ2 event-month chart sorted its month axis by z-score, which put
     2020-05 beside 2016-12 and made an unordered comparison look chronological.
-    Asserted on the built spec rather than trusting the source, so a new chart
-    inherits the rule instead of the mistake.
-    """
-    from dwm.ui.charts import build_charts
 
-    charts = build_charts(_facts_from_warehouse())
+    Checked by walking the built spec's actual axis encodings rather than by
+    counting `"type": "nominal"` occurrences. The count-based version was tried
+    first and was useless: it counted tooltip and colour channels too, so every
+    chart on the dashboard looked like an offender and the check could not
+    distinguish a real problem from a busy legend. Only an axis is an axis.
+    """
+    from dwm.ui.v2_charts import build_v2_charts
+
+    specs = dict(_all_v1_charts())
+    specs.update(build_v2_charts())
+
     offenders = []
-    for name, spec in charts.items():
-        if not spec:
+    for name, spec in specs.items():
+        if not spec or spec.get("dwm_empty"):
             continue
-        blob = json.dumps(spec)
-        nominal = len(re.findall(r'"type":\s*"nominal"', blob))
-        # A legend-only or tooltip-only nominal channel needs no sort, so this
-        # is a ceiling rather than an equality.
-        sorts = len(re.findall(r'"sort":\s*\[', blob))
-        if nominal > sorts + 2:  # colour and tooltip channels are exempt
-            offenders.append(f"{name}: {nominal} nominal channels, {sorts} sorted")
-    assert not offenders, "possibly unsorted nominal axis(es):\n" + "\n".join(offenders)
+        for axis, block in _axis_encodings(spec):
+            if block.get("type") != "nominal":
+                continue
+            # Two legitimate ways to pin a nominal axis, and the test has to
+            # accept both: an explicit `sort` list, or a `scale.domain` array.
+            # The confusion matrix uses the latter, because its rows and columns
+            # must share ONE order and a scale domain expresses that shared
+            # order more directly than two independent sort lists would.
+            has_sort = "sort" in block
+            scale = block.get("scale")
+            has_domain = isinstance(scale, dict) and isinstance(scale.get("domain"), list)
+            if not (has_sort or has_domain):
+                offenders.append(
+                    f"{name}: {axis} axis on {block['field']!r} has neither a sort "
+                    f"nor a scale domain, so it renders in data-arrival order"
+                )
+    assert not offenders, (
+        "nominal axes that will render in data-arrival order:\n" + "\n".join(offenders)
+    )
 
 
 def test_the_event_month_chart_is_in_date_order() -> None:

@@ -820,12 +820,19 @@ def rq7_confusion(facts: dict[str, Any], t: dict[str, Any]) -> dict[str, Any]:
     # Fixed domain so the colour ramp means the same thing regardless of the
     # data: a diagonal cell is always the darkest, an off-diagonal always pale.
     scale = alt.Scale(domain=[0.0, 1.0], range=t["heat"])
+    # Both axes pinned to the same class order. Without it each takes
+    # data-arrival order independently, so the rows can be labelled one way and
+    # the columns another - and a confusion matrix whose two axes disagree is
+    # not a chart of anything, because the diagonal stops being the diagonal.
+    axis_scale = alt.Scale(domain=labels)
     cells_chart = (
         alt.Chart(alt.Data(values=cells))
         .mark_rect(cornerRadius=4)
         .encode(
-            x=alt.X("predicted:N", axis=_axis(t, "predicted", gridColor=None)),
-            y=alt.Y("actual:N", axis=_axis(t, "actual", gridColor=None)),
+            x=alt.X("predicted:N", scale=axis_scale,
+                    axis=_axis(t, "predicted", gridColor=None)),
+            y=alt.Y("actual:N", scale=axis_scale,
+                    axis=_axis(t, "actual", gridColor=None)),
             color=alt.Color("share:Q", scale=scale,
                             legend=alt.Legend(orient="bottom", format=".0%")),
             tooltip=[

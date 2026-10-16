@@ -12,6 +12,8 @@ paired trading days as though that were the finding.
 
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -21,8 +23,22 @@ from dwm.config import Settings
 
 @pytest.fixture(autouse=True)
 def reports_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point every generated-artefact path at this test's own directory."""
+    """Point every generated-artefact path at this test's own directory.
+
+    Seeded from `DWM_TEST_REPORTS_SEED` when that is set. That exists because a
+    redirect makes several tests/test_ui.py checks SKIP rather than fail, and a
+    skipped test that was supposed to catch a broken chart name is worse than no
+    test: the suite reports green while the check never runs. Seeding the temp
+    directory with the real reports lets those checks execute against real
+    output. Set the variable to run them; leave it unset for the fast default.
+    """
     target = tmp_path / "reports"
+    seed = os.environ.get("DWM_TEST_REPORTS_SEED")
+    if seed and Path(seed).is_dir():
+        target.mkdir(parents=True, exist_ok=True)
+        for item in Path(seed).iterdir():
+            if item.is_file():
+                shutil.copy2(item, target / item.name)
     monkeypatch.setenv("DWM_REPORTS_DIR", str(target))
     return target
 
