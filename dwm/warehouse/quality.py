@@ -34,8 +34,15 @@ def _table(con: duckdb.DuckDBPyConnection, name: str) -> bool:
     )
 
 
-def collect(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
-    """Every number the report prints, measured now."""
+def collect(
+    con: duckdb.DuckDBPyConnection, link: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Every number the report prints, measured now.
+
+    `link` is the linking stage's own summary, passed in so the figures it just
+    computed can be reported without re-deriving them from tables that no
+    longer carry headline-level detail.
+    """
     from dwm.warehouse import stock_facts
 
     data: dict[str, Any] = {"generated_at": _now()}
@@ -72,7 +79,14 @@ def collect(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         }
     )
     if _table(con, "fact_news_stock_mention"):
-        data["mentions"] = _mention_coverage(con)
+        from dwm.linking.sector_news import coverage as link_coverage
+
+        data["mentions"] = link_coverage(con)
+        if link and link.get("coverage"):
+            # Prefer the freshly computed figures over the audited fallback.
+            data["mentions"].update(link["coverage"])
+    if link and link.get("market_report"):
+        data["market_report"] = link["market_report"]
     return data
 
 
@@ -105,37 +119,9 @@ def _return_distribution(con: duckdb.DuckDBPyConnection) -> list[tuple[str, int]
     ]
 
 
-def _mention_coverage(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
-    """How often headlines actually name a stock or a sector. Published next to
-    every mention-based figure so a sparse number is never read as a low one."""
-    in_window = "SELECT count(*) FROM fact_headline WHERE in_window"
-    total = int(con.execute(in_window).fetchone()[0])
-    with_stock = int(
-        con.execute(
-            """
-            SELECT count(DISTINCT m.headline_id)
-            FROM fact_news_stock_mention m
-            JOIN fact_headline h ON h.headline_id = m.headline_id
-            WHERE h.in_window
-            """
-        ).fetchone()[0]
-    )
-    with_sector = 0
-    if _table(con, "fact_news_sector_daily"):
-        with_sector = int(
-            con.execute(
-                """
-                SELECT count(DISTINCT s.date_key)
-                FROM fact_news_sector_daily s
-                """
-            ).fetchone()[0]
-        )
-    return {
-        "headlines_in_window": total,
-        "with_stock_mention": with_stock,
-        "share_with_stock": round(with_stock / total, 4) if total else None,
-        "sector_days": with_sector,
-    }
+def _mention_coverage_unused() -> None:
+    """Superseded by dwm.linking.sector_news.coverage, which counts sector
+    coverage from the headline-level pairs instead of a date-only join."""
 
 
 def render(data: dict[str, Any]) -> str:
@@ -281,26 +267,94 @@ def render(data: dict[str, Any]) -> str:
         "",
     ]
 
+    flags = data.get("market_report")
+    if flags and flags.get("flagged") is not None:
+        share = flags["share"] or 0.0
+        lines += [
+            "## Reverse causality",
+            "",
+            f"- Headlines flagged as reporting a market move: **{human_int(flags['flagged'])}**",
+            f"  of {human_int(flags['headlines'])} (**{share:.2%}**).",
+            "",
+            '  "Sensex tanks 500 points" reports a move that already happened. Using',
+            "  those rows to ask whether news predicts prices is backwards, and it",
+            "  inflates every correlation, because the headline was written after the",
+            "  price moved. `is_market_report` rows are excluded from predictive",
+            "  analysis and offered only behind a toggle in descriptive views.",
+            "",
+            "  The flag needs a market name (Sensex, Nifty, Dalal Street) or a reporting",
+            "  phrase (\"market closes\", \"ends higher\"). An earlier version matched bare",
+            '  move words such as "falls" and "gains", which flagged "rain falls in',
+            '  Kerala" and "three points behind" as market reports. Matching those words',
+            "  only inside phrases is what keeps the rate near its true value.",
+            "",
+        ]
+
     mentions = data.get("mentions")
     if mentions:
-        share = mentions["share_with_stock"]
+        stock_share = mentions.get("share_with_stock") or 0.0
+        sector_share = mentions.get("share_with_sector")
         lines += [
             "## News-to-stock linking",
             "",
             f"- Headlines in window: **{human_int(mentions['headlines_in_window'])}**",
-            f"- Headlines naming at least one stock: **{human_int(mentions['with_stock_mention'])}**",
-            f"- Share: **{share:.1%}**",
+            f"- Headlines naming at least one stock: **{human_int(mentions['with_stock_mention'])}**"
+            f" (**{stock_share:.2%}**)",
+        ]
+        if sector_share is not None:
+            lines.append(
+                f"- Headlines reaching at least one sector: "
+                f"**{human_int(mentions['with_sector'])}** (**{sector_share:.2%}**)"
+            )
+        lines += [
             "",
-            "Stock-level mentions are sparse. Sector-level news facts are the more robust",
-            "signal, and any figure built on mentions should be read next to this share.",
+            "Stock-level mentions are sparse by nature: most headlines are about",
+            "something other than a listed company. Sector identification, which can",
+            "rest on one unambiguous keyword, reaches far more. **Read every",
+            "mention-based figure next to this share** - a low count here is the",
+            "expected shape of the corpus, not a broken pipeline.",
             "",
         ]
+        if data.get("mention_precision"):
+            lines += [data["mention_precision"], ""]
+        else:
+            lines += [
+                "### Mention precision",
+                "",
+                "`reports/mention_audit_sample.csv` holds a stratified sample of",
+                f"{data.get('audit_sample_rows', 200)} matched rows with an **empty**",
+                "`is_correct` column. The pipeline never fills it: a precision computed",
+                "from the same heuristic that produced the matches would be measuring",
+                "that heuristic against itself.",
+                "",
+                "To measure it: open the file, put TRUE or FALSE in `is_correct`, then run",
+                "`python -m dwm link --precision`. Until then, no precision figure is",
+                "published anywhere, because a number off a handful of judgements would",
+                "read as a measurement and be a guess.",
+                "",
+                "### A known precision limit, before anyone asks",
+                "",
+                "Alias matching does not distinguish companies that share a name. The",
+                "alias `Adani` attaches news about Adani Power and Adani Ports to",
+                "`ADANIENT` (Adani Enterprises), because they are separate listed",
+                "companies sharing a brand. The context gate accepts these - they are",
+                "genuinely business news - so the match is defensible but not exact.",
+                "",
+                "The same applies to any bare group name in `config/stock_aliases.yaml`.",
+                "This is the kind of thing the audit sample exists to find, and it is",
+                "why stock-level figures should be read as *group-level* unless the",
+                "full company name appears.",
+                "",
+            ]
+
     return "\n".join(lines) + "\n"
 
 
-def write(con: duckdb.DuckDBPyConnection) -> str:
+def write(
+    con: duckdb.DuckDBPyConnection, link: dict[str, Any] | None = None
+) -> str:
     """Collect, render and write the report. Returns its path."""
-    data = collect(con)
+    data = collect(con, link)
     path = reports_dir() / FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render(data), encoding="utf-8")

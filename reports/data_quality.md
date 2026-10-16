@@ -1,6 +1,6 @@
 # Data quality
 
-*Generated 2026-10-16 14:40 UTC by `python -m dwm build`. Every figure below is
+*Generated 2026-10-16 15:35 UTC by `python -m dwm build`. Every figure below is
 read from the warehouse at write time; none is typed in by hand.*
 
 ## News corpus
@@ -88,4 +88,42 @@ been removed from the index are simply absent from this analysis.
 This biases any comparison of sector or index performance across the window: the
 surviving constituents are, by construction, the ones that stayed listed. Any
 chart that aggregates across stocks carries this caveat.
+
+## News-to-stock linking
+
+- Headlines in window: **1,113,427**
+- Headlines naming at least one stock: **4,534** (**0.41%**)
+- Headlines reaching at least one sector: **49,267** (**4.42%**)
+
+Stock-level mentions are sparse by nature: most headlines are about
+something other than a listed company. Sector identification, which can
+rest on one unambiguous keyword, reaches far more. **Read every
+mention-based figure next to this share** - a low count here is the
+expected shape of the corpus, not a broken pipeline.
+
+### Mention precision
+
+`reports/mention_audit_sample.csv` holds a stratified sample of
+200 matched rows with an **empty**
+`is_correct` column. The pipeline never fills it: a precision computed
+from the same heuristic that produced the matches would be measuring
+that heuristic against itself.
+
+To measure it: open the file, put TRUE or FALSE in `is_correct`, then run
+`python -m dwm link --precision`. Until then, no precision figure is
+published anywhere, because a number off a handful of judgements would
+read as a measurement and be a guess.
+
+### A known precision limit, before anyone asks
+
+Alias matching does not distinguish companies that share a name. The
+alias `Adani` attaches news about Adani Power and Adani Ports to
+`ADANIENT` (Adani Enterprises), because they are separate listed
+companies sharing a brand. The context gate accepts these - they are
+genuinely business news - so the match is defensible but not exact.
+
+The same applies to any bare group name in `config/stock_aliases.yaml`.
+This is the kind of thing the audit sample exists to find, and it is
+why stock-level figures should be read as *group-level* unless the
+full company name appears.
 

@@ -209,6 +209,39 @@ def infer(
 
 
 @app.command()
+def link(
+    db: DbOpt = None, sample: SampleOpt = None, years: YearsOpt = 5,
+    chunk: ChunkOpt = 100_000,
+    precision: Annotated[
+        bool, typer.Option("--precision", help="Compute mention precision from the "
+                          "human-filled reports/mention_audit_sample.csv instead of "
+                          "re-linking.")
+    ] = False,
+) -> None:
+    """Flag market reports, link headlines to stocks and sectors.
+
+    Writes fact_news_stock_mention and fact_news_sector_daily, refreshes
+    reports/data_quality.md, and writes a blank mention audit sample for a
+    person to label.
+    """
+    if precision:
+        from dwm.db import connect
+        from dwm.linking.audit_sample import precision as compute_precision
+
+        con = connect(_settings(db, sample, years, chunk))
+        try:
+            _echo_json(compute_precision(con))
+        finally:
+            con.close()
+        return
+
+    from dwm.linking import run_link
+
+    settings = _settings(db, sample, years, chunk)
+    _echo_json(run_link(settings))
+
+
+@app.command()
 def olap(
     db: DbOpt = None,
     operation: Annotated[
