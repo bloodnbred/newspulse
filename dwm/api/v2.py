@@ -34,37 +34,22 @@ CACHE_TTL_S = 60.0
 MAX_HEADLINES = 50
 
 
-_CON = None
-
 #: The reader lock lives in `dwm.api.store`, next to the connection it guards,
 #: and `_reading()` below delegates to it. It was originally here, which left
 #: `store.py` unlocked - and every v1 route went on having the same defect that
 #: had just been fixed for v2. A lock that sits in one router is a lock that
 #: only protects one router.
-
-
-def _con():
-    """One long-lived read-only handle on the API snapshot.
-
-    DuckDB caches its connection objects per database path, so opening and
-    closing a handle per request does not give each request its own connection -
-    it closes the one every other request is using, and the next call fails with
-    "Connection already closed". So the handle is created once and kept for the
-    life of the process, which is also what the snapshot exists for: the API
-    holds a read-only copy open while the CLI keeps writing the real warehouse.
-
-    Callers must hold `_LOCK` for the whole execute-then-read sequence.
-    """
-    global _CON
-    if _CON is None:
-        _CON = store.connection()
-    return _CON
+#:
+#: There was also a module-level `_CON` here with an accessor that nothing
+#: called. It was an unlocked handle kept alive only to exist, and
+#: `tests/test_v7_views.py::test_no_api_module_holds_an_unlocked_handle` now
+#: fails on its presence. The handle belongs to `store`; nothing else should
+#: have one.
 
 
 def _reset_connection() -> None:
     """Drop the cached handle. Called by the reload endpoint and by tests."""
-    global _CON
-    _CON = None
+    store.reset_connection()
 
 
 @contextmanager

@@ -43,6 +43,9 @@ export default function App() {
         <Route path="stocks" element={<Suspense fallback={<PageFallback />}><Stocks /></Suspense>} />
         <Route path="stocks/:symbol" element={<Suspense fallback={<PageFallback />}><Stocks /></Suspense>} />
         <Route path="events" element={<Suspense fallback={<PageFallback />}><Events /></Suspense>} />
+        {/* So a selected event is linkable: the timeline pushes the key into the
+            URL, and without the param route that link rendered nothing at all. */}
+        <Route path="events/:eventKey" element={<Suspense fallback={<PageFallback />}><Events /></Suspense>} />
         <Route path="mining" element={<Suspense fallback={<PageFallback />}><Mining /></Suspense>} />
         <Route path="headline" element={<Suspense fallback={<PageFallback />}><Headline /></Suspense>} />
         <Route path="data" element={<Suspense fallback={<PageFallback />}><Data /></Suspense>} />

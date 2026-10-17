@@ -181,6 +181,16 @@ def connection():
     return _open_connection()
 
 
+def reset_connection() -> None:
+    """Drop the cached handle so the next read reopens it.
+
+    Held under the lock, because dropping a handle another thread is mid-query
+    on is the exact failure this module exists to prevent.
+    """
+    with _LOCK:
+        _open_connection.cache_clear()
+
+
 def _load_facts() -> dict[str, Any]:
     path = facts_path()
     if not path.exists():

@@ -18,10 +18,12 @@ import * as echarts from 'echarts/core'
 
 import {
   BarChart,
+  CandlestickChart,
   GaugeChart,
   HeatmapChart,
   LineChart,
   PieChart,
+  RadarChart,
   ScatterChart,
   TreemapChart,
 } from 'echarts/charts'
@@ -39,6 +41,7 @@ import {
   LegendComponent,
   MarkAreaComponent,
   MarkLineComponent,
+  MarkPointComponent,
   TitleComponent,
   TooltipComponent,
   VisualMapComponent,
@@ -65,10 +68,12 @@ import { THEME_NAME, echartsTheme } from './echartsTheme'
  * a megabyte of unused library. */
 echarts.use([
   BarChart,
+  CandlestickChart,
   GaugeChart,
   HeatmapChart,
   LineChart,
   PieChart,
+  RadarChart,
   ScatterChart,
   TreemapChart,
   AriaComponent,
@@ -80,6 +85,7 @@ echarts.use([
   LegendComponent,
   MarkAreaComponent,
   MarkLineComponent,
+  MarkPointComponent,
   TitleComponent,
   TooltipComponent,
   VisualMapComponent,

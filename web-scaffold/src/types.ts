@@ -153,6 +153,146 @@ export interface CubeHeadline {
 export type CubeZone = 'rows' | 'columns' | 'values' | 'filters';
 
 export type CubeViewKind = 'table' | 'heatmap' | 'bars' | 'treemap';
+
+/* -------------------------------------------------------------------------
+ * Stock 360 and Event Lab
+ * ---------------------------------------------------------------------- */
+
+/** One session of one stock. `mentions` is joined on
+ *  `effective_trading_date_key`, so a Sunday headline lands on the Monday bar
+ *  rather than on a gap where there is no price. */
+export interface StockSession {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  return_pct: number;
+  volatility_20d: number;
+  mentions: number;
+  nifty_close: number;
+  /** Both series start at 100 on the window's first session, computed in SQL. */
+  stock_rebased: number;
+  nifty_rebased: number;
+}
+
+export interface RadarAxis {
+  key: string;
+  label: string;
+  description: string;
+  value: number | null;
+  cluster_mean: number | null;
+  /** Bounds of this axis across the whole set, so each arm of the radar can be
+   *  scaled on its own. One shared min/max across six axes of different units
+   *  collapses four of them onto the centre. */
+  pop_min: number | null;
+  pop_max: number | null;
+  /** Share of the set this stock sits above on this axis. */
+  percentile: number | null;
+}
+
+export interface EventReaction {
+  event_key: number;
+  label: string;
+  type: string;
+  date: string;
+  car_0_5: number;
+  car_0_1: number;
+  beta: number;
+  est_days: number;
+}
+
+export interface Stock360 {
+  profile: {
+    symbol: string;
+    company_name: string;
+    sector: string | null;
+    sector_key: number | null;
+    isin: string | null;
+    is_survivor: boolean;
+    price_source: string | null;
+    first_trade_date: string | null;
+    last_trade_date: string | null;
+  };
+  last: StockSession | null;
+  /** Rupees, not percent. The name says so because the first version called it
+   *  `change_pct` and the header then printed a price difference as a change. */
+  change_abs: number | null;
+  series: StockSession[];
+  cluster: { cluster_id: number | null; axes: RadarAxis[] };
+  peers: { symbol: string; sector: string | null; beta: number; ann_volatility: number }[];
+  reactions: EventReaction[];
+  totals: { sessions: number; mentions: number; outliers_excluded: number };
+}
+
+export interface StockHeadline {
+  headline_id: number;
+  publish_date: string;
+  topic: string;
+  headline_text: string;
+  sentiment_compound: number;
+  sensational_score: number;
+  is_sensational: boolean;
+  is_risk_signal: boolean;
+  matched_alias: string;
+  is_ambiguous_alias: boolean;
+}
+
+export interface EventSummary {
+  event_key: number;
+  label: string;
+  type: string;
+  date: string;
+  stocks_studied: number;
+  stocks_excluded: number;
+}
+
+export interface SectorReaction {
+  sector: string;
+  n_stocks: number;
+  mean_car_0_5: number;
+  mean_car_0_1: number;
+  mean_car_m1_5: number;
+  mean_beta: number;
+}
+
+export interface StockReaction {
+  symbol: string;
+  sector: string;
+  car_0_5: number;
+  car_0_1: number;
+  beta: number;
+  r_squared: number;
+  est_days: number;
+}
+
+export interface EventDetail {
+  event: {
+    event_key: number;
+    label: string;
+    type: string;
+    date: string;
+    session: string | null;
+  };
+  by_sector: SectorReaction[];
+  /** The whole valid set sorted by CAR, so the leaderboard can show that most
+   *  stocks did not move - not only the extremes. */
+  by_stock: StockReaction[];
+  excluded: { symbol: string; reason: string; est_days: number }[];
+  news_around: { offset: number; date: string; news: number }[];
+  headlines: {
+    headline_id: number;
+    publish_date: string;
+    topic: string;
+    headline_text: string;
+    sensational_score: number;
+    is_market_report: boolean;
+  }[];
+  /** Events within four days: two events that close cannot be separated in a
+   *  five-day window, and the page has to say so rather than imply otherwise. */
+  nearby_events: { event_key: number; label: string; date: string; days_apart: number }[];
+}
 export interface InsightCard {
   id: string; title: string; text: string; concept: Concept; page: string;
   evidence: Record<string, number | string>;

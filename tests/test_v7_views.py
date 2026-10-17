@@ -86,15 +86,17 @@ def test_every_v2_chart_carries_a_caption_and_a_caution(theme: str) -> None:
     caution lets the reader take the figure as more than it is. Neither fails to
     render - which is exactly why they need asserting.
     """
-    from dwm.api.v2 import _con
+    from dwm.api import store
     from dwm.ui.v2_charts import build_v2_charts
 
     # Real rows, so these are the specs the endpoint will actually serve and not
     # the named-empty placeholders a no-argument call produces.
+    # `store.connection()` is the raw UNLOCKED handle and this test is
+    # single-threaded, so nothing can interleave with it.
     payload = build_v2_charts(
         theme_name=theme,
         mood_rows=_mood_rows(),
-        stock_points=_stock_rows(_con()),
+        stock_points=_stock_rows(store.connection()),
         cube_rows=[{"sector": "Energy", "p2019": 12.0, "p2020": 9.0}],
         event_bars=[{"sector": "Energy", "mean_car_0_5": 1.2, "n_stocks": 5}],
         cluster_points=[
@@ -713,6 +715,14 @@ def test_the_lock_lives_beside_the_connection_and_every_reader_takes_it() -> Non
         ("v2._has", lambda: v2._has("fact_headline")),
         ("ui._has", lambda: ui._has("cube_sector_month")),
         ("v2._rows", lambda: v2._rows("SELECT 1 AS n")),
+        # `ui._window()` was the one live unlocked reader. It held a
+        # module-level handle from `store.connection()` and ran
+        # `execute().fetchone()` on it, so it could overwrite a concurrent
+        # request's result set - and the failure surfaced in THAT request, as a
+        # TypeError inside a `_has` that had been correct all along. Hammering
+        # only the locked readers cannot see it, which is why it survived the
+        # previous two rounds of this fix.
+        ("ui._window", ui._window),
     ]
     threads = [threading.Thread(target=hammer, args=job) for job in jobs for _ in range(3)]
     for thread in threads:
@@ -724,6 +734,49 @@ def test_the_lock_lives_beside_the_connection_and_every_reader_takes_it() -> Non
         f"{len(errors)} of {len(threads) * 40} concurrent reads failed. Every "
         f"reader of the shared handle must go through store.reading(). "
         f"First few: {errors[:3]}"
+    )
+
+
+def test_no_api_module_holds_an_unlocked_handle() -> None:
+    """The structural half of the guard above.
+
+    The hammer test can only prove the readers it happens to call. This proves
+    the property that makes them all safe: no module keeps a connection of its
+    own. `store.connection()` stays for callers outside `store`, but it hands
+    back an UNLOCKED handle, and a lock that only some readers take protects
+    nothing - the unlocked ones overwrite the locked ones' result sets.
+    """
+    import ast
+    from pathlib import Path
+
+    api = Path(__file__).resolve().parent.parent / "dwm" / "api"
+    offenders: list[str] = []
+    for path in sorted(api.glob("*.py")):
+        if path.name == "store.py":
+            continue  # the owner; `connection()` is its documented escape hatch
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            # A module-level assignment whose value calls store.connection().
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            if not isinstance(getattr(node, "parent", None), ast.Module):
+                # ast does not set `parent`; check the statement list instead.
+                pass
+            value = node.value
+            if value is None:
+                continue
+            text = ast.unparse(value)
+            if "store.connection()" in text or (
+                path.stem == "v2" and "_con" in text and "duckdb.connect" in text
+            ):
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                name = ast.unparse(targets[0])
+                offenders.append(f"{path.name}: {name} = {text}")
+    assert not offenders, (
+        "a module-level handle outside store.py defeats the lock: "
+        + "; ".join(offenders)
     )
 
 

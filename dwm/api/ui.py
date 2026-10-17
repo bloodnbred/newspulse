@@ -41,7 +41,6 @@ import duckdb
 from fastapi import APIRouter, Body, Query
 from fastapi.responses import JSONResponse
 
-from dwm.api import store
 from dwm.logging_utils import get
 
 log = get("dwm.api.ui")
@@ -55,26 +54,6 @@ CACHE_CONTROL = "public, max-age=300"
 
 _MAX_ROWS = 500
 _MAX_HEADLINES = 50
-
-_LOCK_CON: duckdb.DuckDBPyConnection | None = None
-
-
-def con() -> duckdb.DuckDBPyConnection:
-    """The one long-lived read-only handle on the API snapshot.
-
-    Shared with the v2 router for the same reason it is shared there: DuckDB
-    caches connection objects per database path, so a handle opened per request
-    is not a private handle. Serialised by `_reading` in dwm.api.v2 rather than
-    locking twice, so every reader of this warehouse - v1, v2 and ui - queues
-    behind one lock.
-    """
-    global _LOCK_CON
-    from dwm.api.v2 import _reading
-
-    if _LOCK_CON is None:
-        with _reading():
-            _LOCK_CON = store.connection()
-    return _LOCK_CON
 
 
 @contextmanager
@@ -93,12 +72,23 @@ class _Queries:
     is what the "How this was computed" drawer shows, so the answer to "what
     query produced this number" is the query rather than a prose description of
     it.
+
+    The connection is optional. Three endpoints - the field shelf, the sector
+    list and the schema - run no SQL at all, and passing them a handle is the
+    only reason those call sites needed one. They pass `None`, which makes the
+    absence of a statement an explicit fact rather than an empty handle that
+    could be used by accident.
     """
 
-    def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
+    def __init__(self, connection: duckdb.DuckDBPyConnection | None) -> None:
         self.con = connection
         self.statements: list[str] = []
         self.rows_returned = 0
+
+    def _handle(self) -> duckdb.DuckDBPyConnection:
+        if self.con is None:
+            raise RuntimeError("this endpoint holds no connection; it runs no SQL")
+        return self.con
 
     def _record(self, sql: str) -> None:
         text = " ".join(sql.split())
@@ -106,7 +96,7 @@ class _Queries:
 
     def rows(self, sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
         self._record(sql)
-        cur = self.con.execute(sql, params or [])
+        cur = self._handle().execute(sql, params or [])
         columns = [d[0] for d in cur.description]
         out = [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
         self.rows_returned += len(out)
@@ -118,7 +108,7 @@ class _Queries:
 
     def scalar(self, sql: str, params: list[Any] | None = None) -> Any:
         self._record(sql)
-        row = self.con.execute(sql, params or []).fetchone()
+        row = self._handle().execute(sql, params or []).fetchone()
         return row[0] if row else None
 
     @property
@@ -233,11 +223,18 @@ def _window() -> tuple[str, str]:
     every `/ui/*` payload consistent with `facts.json` without each endpoint
     having to remember to filter on it.
     """
-    row = con().execute(
-        """
-        SELECT min(publish_date), max(publish_date) FROM fact_headline WHERE in_window
-        """
-    ).fetchone()
+    # Under the lock, like every other read. This one used a module-level
+    # handle with no lock, so it could steal a concurrent request's result set:
+    # the unlocked thread's `execute` overwrote the locked thread's, and the
+    # locked thread's `fetchone()` then returned None - a TypeError on
+    # `'NoneType' object is not subscriptable` raised inside a DIFFERENT
+    # request's `_has`, from code that had been correct all along.
+    with reading() as c:
+        row = c.execute(
+            """
+            SELECT min(publish_date), max(publish_date) FROM fact_headline WHERE in_window
+            """
+        ).fetchone()
     if row and row[0] and row[1]:
         return str(row[0]), str(row[1])
     return "2015-06-30", "2020-06-30"
@@ -265,6 +262,498 @@ def _has(table: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Stock 360 and Event Lab
+# ---------------------------------------------------------------------------
+
+
+#: The six axes of the peer radar, in the order they are drawn. Each is a
+#: standardised feature from `mining_stock_clusters`, so "this stock versus its
+#: cluster" is a comparison of like with like rather than of rupees with percent.
+RADAR_AXES: tuple[tuple[str, str, str], ...] = (
+    ("ann_volatility", "Annualised volatility", "Higher means a wider spread of daily moves."),
+    ("beta", "Beta vs the Nifty", "1.0 moves with the index; above 1 amplifies it."),
+    ("max_drawdown", "Max drawdown", "The worst peak-to-trough fall over the window, as a fraction."),
+    ("mentions_per_1000_days", "Mention rate", "Headlines naming this stock per 1,000 trading days."),
+    ("mention_sentiment", "Mention sentiment", "Mean sentiment of the headlines that named it."),
+    ("news_sensitivity", "News sensitivity", "How strongly its returns track its own news volume."),
+)
+
+
+@router.get("/ui/stocks/{symbol}")
+def stock_360(symbol: str, include_market: int = Query(0, ge=0, le=1)) -> JSONResponse:
+    """One company, in one call.
+
+    The page needs a candlestick, a rebase against the Nifty, a mention series,
+    six peer metrics against their cluster average, this stock's reaction to
+    every studied event, and its cluster neighbours. Six round trips to render
+    one screen is six chances to show a half-loaded panel, so the series comes
+    from the cube at daily grain rather than from `fact_headline`.
+
+    **The series is the window, not the last 400 sessions.** `/stocks/{symbol}`
+    returns the most recent 400 rows, which is right for a sparkline and wrong
+    for a chart the reader is about to zoom across five years.
+    """
+    started = time.perf_counter()
+    if not _has("fact_stock_daily"):
+        return _not_built("fact_stock_daily", "python -m dwm ingest --dataset stocks")
+    sym = symbol.strip().upper()
+    with reading() as c:
+        q = _Queries(c)
+        profile = q.one(
+            """
+            SELECT d.symbol, d.company_name, d.sector_key, s.sector_name AS sector,
+                   d.isin, d.is_survivor, d.price_source, d.first_trade_date,
+                   d.last_trade_date
+            FROM dim_stock d
+            LEFT JOIN dim_sector s ON s.sector_key = d.sector_key
+            WHERE d.symbol = ?
+            """,
+            [sym],
+        )
+        if profile is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "detail": (
+                        f"No company with the symbol {sym!r}. Symbols come from the "
+                        "NSE constituent list, so a company that has since been "
+                        "removed from the index will not be here."
+                    )
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+
+        # Mentions are joined on `effective_trading_date_key`, never on the
+        # calendar date (rule 12): a headline on a Sunday belongs to the next
+        # session, and plotting it on Sunday would put activity on a day with no
+        # price bar next to it.
+        series = q.rows(
+            """
+            WITH m AS (
+                SELECT effective_trading_date_key AS dk, count(*) AS mentions
+                FROM fact_news_stock_mention
+                WHERE stock_key = (SELECT stock_key FROM dim_stock WHERE symbol = ?)
+                  AND (? = 1 OR NOT is_market_report)
+                GROUP BY 1
+            ),
+            px AS (
+                SELECT p.date_key, p.trade_date, p.open, p.high, p.low, p.close,
+                       p.volume, p.return_pct, p.volatility_20d
+                FROM fact_stock_daily p
+                JOIN dim_date dd ON dd.date_key = p.date_key
+                WHERE p.stock_key = (SELECT stock_key FROM dim_stock WHERE symbol = ?)
+                  AND NOT p.is_outlier
+                  AND dd.full_date BETWEEN ? AND ?
+            ),
+            idx AS (
+                SELECT date_key, close AS nifty_close
+                FROM fact_market_daily WHERE in_window
+            ),
+            rebased AS (
+                SELECT *,
+                       100.0 * close / first_value(close) OVER (ORDER BY trade_date) AS stock_rebased,
+                       100.0 * nifty_close
+                         / first_value(nifty_close) OVER (ORDER BY trade_date) AS nifty_rebased
+                FROM px JOIN idx USING (date_key)
+            )
+            SELECT r.trade_date AS date, r.open, r.high, r.low, r.close,
+                   r.volume, r.return_pct, r.volatility_20d,
+                   coalesce(m.mentions, 0) AS mentions,
+                   r.nifty_close, r.stock_rebased, r.nifty_rebased
+            FROM rebased r LEFT JOIN m ON m.dk = r.date_key
+            ORDER BY r.trade_date
+            """,
+            [sym, include_market, sym, *_window()],
+        )
+
+        mine = q.one(
+            """
+            SELECT cluster_id, ann_volatility, beta, max_drawdown,
+                   mentions_per_1000_days, mention_sentiment, news_sensitivity
+            FROM mining_stock_clusters WHERE symbol = ?
+            """,
+            [sym],
+        )
+        cluster_id = mine["cluster_id"] if mine else None
+        axes: list[dict[str, Any]] = []
+        peers: list[dict[str, Any]] = []
+        if mine is not None:
+            cols = ", ".join(a[0] for a in RADAR_AXES)
+            cluster_avg = q.one(
+                f"""
+                SELECT {cols}
+                FROM mining_stock_clusters
+                WHERE cluster_id = ? AND symbol <> ?
+                """,
+                [cluster_id, sym],
+            ) or {}
+            # Per-axis population bounds, computed one axis at a time. A radar
+            # scaled by a single min/max across all six axes is unreadable:
+            # mention rate runs to 330 while news sensitivity sits near zero, so
+            # four axes collapse onto the centre and the polygon becomes a
+            # vertical spike that says nothing. Each axis is scaled against its
+            # own spread, so "further out" means the same thing on every arm.
+            population = q.rows(
+                f"""
+                SELECT symbol, {cols} FROM mining_stock_clusters
+                """
+            )
+            for key, label, blurb in RADAR_AXES:
+                values = [
+                    float(r[key]) for r in population
+                    if isinstance(r.get(key), (int, float))
+                ]
+                value = mine.get(key)
+                lo = min(values) if values else 0.0
+                hi = max(values) if values else 1.0
+                below = sum(1 for v in values if isinstance(value, (int, float)) and v < value)
+                axes.append(
+                    {
+                        "key": key,
+                        "label": label,
+                        "description": blurb,
+                        "value": _round(value),
+                        "cluster_mean": _round(cluster_avg.get(key)),
+                        "pop_min": _round(lo),
+                        "pop_max": _round(hi),
+                        # A true rank, not a rescaled number: the share of the
+                        # set this stock sits above on this axis.
+                        "percentile": round(100.0 * below / len(values), 1) if values else None,
+                    }
+                )
+            peers = q.rows(
+                """
+                SELECT symbol, sector_name AS sector, round(beta, 3) AS beta,
+                       round(ann_volatility, 2) AS ann_volatility
+                FROM mining_stock_clusters
+                WHERE cluster_id = ? AND symbol <> ?
+                ORDER BY symbol LIMIT 12
+                """,
+                [cluster_id, sym],
+            )
+
+        reactions = q.rows(
+            """
+            SELECT e.event_key, e.event_label AS label, e.event_type AS type,
+                   e.start_date AS date,
+                   round(m.car_0_5, 4) AS car_0_5,
+                   round(m.car_0_1, 4) AS car_0_1,
+                   round(m.beta, 3) AS beta,
+                   m.est_days
+            FROM mining_event_study m
+            JOIN dim_event e ON e.event_key = m.event_key
+            JOIN dim_stock d ON d.stock_key = m.stock_key
+            WHERE d.symbol = ? AND m.valid AND m.car_0_5 IS NOT NULL
+            ORDER BY e.start_date
+            """,
+            [sym],
+        )
+        # Counted HERE, inside the `with reading()` block. It used to be a
+        # helper called after the block had exited, which meant the lock was
+        # already released: this thread's `execute` overwrote whatever result
+        # set another request had just prepared, and that request failed with a
+        # 404 for a company or an event that plainly exists. The symptom named
+        # the wrong thing in every case - this was invisible to a test that
+        # hammered only module-level handles, because the handle was local.
+        outliers_excluded = q.scalar(
+            """
+            SELECT count(*) FROM fact_stock_daily p
+            JOIN dim_stock d ON d.stock_key = p.stock_key
+            WHERE d.symbol = ? AND p.is_outlier
+            """,
+            [sym],
+        )
+
+    last = series[-1] if series else None
+    prev = series[-2] if len(series) > 1 else None
+    body = {
+        "profile": profile,
+        "last": last,
+        # Named for what it holds. The first version called this `change_pct`
+        # while putting a rupee difference in it, and the percentage the header
+        # actually wanted was already in `last.return_pct`.
+        "change_abs": round(last["close"] - prev["close"], 4) if last and prev else None,
+        "series": series,
+        "cluster": {"cluster_id": cluster_id, "axes": axes},
+        "peers": peers,
+        "reactions": reactions,
+        "totals": {
+            "sessions": len(series),
+            "mentions": sum(int(r["mentions"] or 0) for r in series),
+            "outliers_excluded": outliers_excluded,
+        },
+    }
+    return envelope(
+        "Fact constellation",
+        body,
+        q,
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "A mention means the company name appeared in the headline, not that the "
+            "story was about it; alias matching is noisy and ambiguous aliases are "
+            "flagged in fact_news_stock_mention. The precision of that matching is not "
+            "measured: reports/mention_audit_sample.csv needs a human to fill in "
+            "`is_correct` before any precision figure can be published, and until then "
+            "the mention counts on this page are a coverage measure and nothing more. "
+            "Returns are percentage points from adjusted closes, so dividends do not "
+            "read as losses. Daily moves beyond +/-25% are excluded here as outliers "
+            "and kept in fact_stock_daily. The rebased series starts at 100 on the "
+            "first session of the window, so it says how the stock moved relative to "
+            "the index, not how much it is worth."
+        ),
+    )
+
+
+def _round(value: Any, digits: int = 4) -> float | None:
+    return round(float(value), digits) if isinstance(value, (int, float)) else None
+
+
+@router.get("/ui/stocks/{symbol}/headlines")
+def stock_headlines(
+    symbol: str,
+    limit: int = Query(50, ge=1, le=50),
+    include_market: int = Query(0, ge=0, le=1),
+) -> JSONResponse:
+    """The headlines that named a company, newest first, capped at 50.
+
+    Rule 21's cap is the API's. The page passes the visible date range, so the
+    timeline follows the chart's zoom rather than fetching 4,686 rows and
+    filtering in the browser.
+    """
+    started = time.perf_counter()
+    if not _has("fact_news_stock_mention"):
+        return _not_built("fact_news_stock_mention", "python -m dwm link")
+    with reading() as c:
+        q = _Queries(c)
+        rows = q.rows(
+            """
+            SELECT h.headline_id, h.publish_date, tp.topic_name AS topic,
+                   h.headline_text, h.sentiment_compound, h.sensational_score,
+                   h.is_sensational, h.is_risk_signal,
+                   m.matched_alias, m.is_ambiguous_alias
+            FROM fact_news_stock_mention m
+            JOIN fact_headline h ON h.headline_id = m.headline_id
+            JOIN dim_topic tp ON tp.topic_key = h.topic_key
+            JOIN dim_stock d ON d.stock_key = m.stock_key
+            WHERE d.symbol = ? AND h.in_window AND (? = 1 OR NOT m.is_market_report)
+            ORDER BY h.publish_date DESC, h.sensational_score DESC
+            LIMIT ?
+            """,
+            [symbol.strip().upper(), include_market, limit],
+        )
+    return envelope(
+        "Text mining",
+        rows,
+        q,
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "Named by name, not by topic. A company can be mentioned in passing in a "
+            "headline about something else entirely, which is why an ambiguous alias "
+            "is flagged rather than resolved. Precision of the name matching is not "
+            "measured: reports/mention_audit_sample.csv needs a human to fill in "
+            "`is_correct` before any precision figure can be published."
+        ),
+    )
+
+
+@router.get("/ui/events")
+def event_timeline() -> JSONResponse:
+    """Every event in the window, in order, with its type for the timeline."""
+    started = time.perf_counter()
+    if not _has("dim_event"):
+        return _not_built("dim_event", "python -m dwm build")
+    with reading() as c:
+        q = _Queries(c)
+        rows = q.rows(
+            """
+            SELECT e.event_key, e.event_label AS label, e.event_type AS type,
+                   e.start_date AS date,
+                   (SELECT count(*) FROM mining_event_study m
+                     WHERE m.event_key = e.event_key AND m.valid) AS stocks_studied,
+                   (SELECT count(*) FROM mining_event_study m
+                     WHERE m.event_key = e.event_key AND NOT m.valid) AS stocks_excluded
+            FROM dim_event e
+            ORDER BY e.start_date
+            """
+        )
+    return envelope(
+        "Event study, market model",
+        {"events": rows},
+        q,
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "Event dates were entered by hand from config/events_v2.yaml, not "
+            "scraped from a news feed, and the event day is mapped to the next "
+            "trading session - so a Sunday budget lands on the Monday bar. Two "
+            "events close together cannot be told apart in a five-day window, and "
+            "the page says so when that happens."
+        ),
+    )
+
+
+@router.get("/ui/events/{event_key}")
+def event_detail(event_key: int, include_market: int = Query(0, ge=0, le=1)) -> JSONResponse:
+    """One event: how sectors reacted, which stocks moved, and what was said.
+
+    The news-volume window is ten trading days either side of the mapped event
+    session, joined on `effective_trading_date_key` so a headline printed over
+    the weekend sits on the Monday bar rather than on a gap.
+    """
+    started = time.perf_counter()
+    if not _has("mining_event_study"):
+        return _not_built("mining_event_study", "python -m dwm mine --op events")
+    with reading() as c:
+        q = _Queries(c)
+        event = q.one(
+            """
+            SELECT e.event_key, e.event_label AS label, e.event_type AS type,
+                   e.start_date AS date,
+                   (SELECT min(m.event_day) FROM mining_event_study m
+                     WHERE m.event_key = e.event_key AND m.valid) AS session
+            FROM dim_event e WHERE e.event_key = ?
+            """,
+            [event_key],
+        )
+        if event is None:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": f"No event with key {event_key}."},
+                headers={"Cache-Control": "no-store"},
+            )
+
+        by_sector = q.rows(
+            """
+            SELECT coalesce(s.sector_name, 'Unclassified') AS sector,
+                   count(*) AS n_stocks,
+                   round(avg(m.car_0_5), 4) AS mean_car_0_5,
+                   round(avg(m.car_0_1), 4) AS mean_car_0_1,
+                   round(avg(m.car_m1_5), 4) AS mean_car_m1_5,
+                   round(avg(m.beta), 3) AS mean_beta
+            FROM mining_event_study m
+            LEFT JOIN dim_sector s ON s.sector_key = m.sector_key
+            WHERE m.event_key = ? AND m.valid AND m.car_0_5 IS NOT NULL
+            GROUP BY 1 ORDER BY abs(avg(m.car_0_5)) DESC
+            """,
+            [event_key],
+        )
+        # The whole valid set, not the top 20 by |CAR|: a leaderboard that shows
+        # only the extremes cannot show that 40 stocks did not move.
+        by_stock = q.rows(
+            """
+            SELECT d.symbol, coalesce(s.sector_name, 'Unclassified') AS sector,
+                   round(m.car_0_5, 4) AS car_0_5,
+                   round(m.car_0_1, 4) AS car_0_1,
+                   round(m.beta, 3) AS beta,
+                   round(m.r_squared, 3) AS r_squared,
+                   m.est_days
+            FROM mining_event_study m
+            JOIN dim_stock d ON d.stock_key = m.stock_key
+            LEFT JOIN dim_sector s ON s.sector_key = m.sector_key
+            WHERE m.event_key = ? AND m.valid AND m.car_0_5 IS NOT NULL
+            ORDER BY m.car_0_5 DESC
+            """,
+            [event_key],
+        )
+        excluded = q.rows(
+            """
+            SELECT d.symbol, m.reason, m.est_days
+            FROM mining_event_study m JOIN dim_stock d ON d.stock_key = m.stock_key
+            WHERE m.event_key = ? AND NOT m.valid ORDER BY d.symbol
+            """,
+            [event_key],
+        )
+        # `event_day` is a DATE and `date_key` is a YYYYMMDD integer. The
+        # mapping is a format, not a cast: `CAST(date AS BIGINT)` yields days
+        # since the epoch and silently matches nothing. Resolved once here
+        # instead of repeated as a correlated subquery in three statements, two
+        # of which had the alias out of scope anyway.
+        session = event.get("session")
+        session_key = int(session.strftime("%Y%m%d")) if hasattr(session, "strftime") else None
+
+        around = q.rows(
+            # The offset is a row number's distance from the event session.
+            # Subtracting two row_number()s over opposite orderings - the
+            # obvious way to centre a window - yields only values of one parity,
+            # so the first version returned days -9, -7, -5 and silently dropped
+            # every other session.
+            """
+            WITH anchor AS (
+                SELECT CAST(full_date AS DATE) AS d FROM dim_date WHERE date_key = ?
+            ),
+            ordered AS (
+                SELECT date_key, trade_date,
+                       row_number() OVER (ORDER BY trade_date) AS rn
+                FROM fact_market_daily WHERE in_window
+            ),
+            anchor_rn AS (
+                SELECT o.rn FROM ordered o, anchor a WHERE o.trade_date = a.d
+            ),
+            sessions AS (
+                SELECT o.date_key, o.trade_date, o.rn - ar.rn AS offset
+                FROM ordered o CROSS JOIN anchor_rn ar
+                WHERE abs(o.rn - ar.rn) <= 10
+            )
+            SELECT s.offset, s.trade_date AS date,
+                   coalesce(sum(f.news_count_non_market), 0) AS news
+            FROM sessions s
+            LEFT JOIN fact_news_sector_daily f
+                   ON f.effective_trading_date_key = s.date_key
+            GROUP BY 1, 2 ORDER BY s.offset
+            """,
+            [session_key],
+        )
+        headlines = q.rows(
+            """
+            SELECT h.headline_id, h.publish_date, tp.topic_name AS topic,
+                   h.headline_text, h.sensational_score, h.is_market_report
+            FROM fact_headline h
+            JOIN dim_topic tp ON tp.topic_key = h.topic_key
+            WHERE h.in_window AND h.date_key = ? AND (? = 1 OR NOT h.is_market_report)
+            ORDER BY h.sensational_score DESC LIMIT 50
+            """,
+            [session_key, include_market],
+        )
+        # Two events within four days of each other cannot be told apart in a
+        # five-day window, so the page is told which ones overlap.
+        nearby = q.rows(
+            """
+            SELECT e.event_key, e.event_label AS label, e.start_date AS date,
+                   abs(date_diff('day', e.start_date, a.d)) AS days_apart
+            FROM dim_event e,
+                 (SELECT CAST(full_date AS DATE) AS d FROM dim_date WHERE date_key = ?) a
+            WHERE e.event_key <> ? AND abs(date_diff('day', e.start_date, a.d)) <= 4
+            ORDER BY e.start_date
+            """,
+            [session_key, event_key],
+        )
+
+    body = {
+        "event": event,
+        "by_sector": by_sector,
+        "by_stock": by_stock,
+        "excluded": excluded,
+        "news_around": around,
+        "headlines": headlines,
+        "nearby_events": nearby,
+    }
+    return envelope(
+        "Event study, market model",
+        body,
+        q,
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "Cumulative abnormal return is the move beyond what the market model "
+            "explains, measured over the sessions after the event. It coincides "
+            "with the event; it does not show the event caused it. Other news on "
+            "the same day produces the same number, and two events within four days "
+            "of each other cannot be separated in a five-day window - the page "
+            "warns when that is the case. Stocks in `excluded` had too little "
+            "pre-event history to fit a model and are kept out of every average."
+        ),
+    )
+
+
 @router.get("/ui/cube/schema")
 def cube_schema() -> JSONResponse:
     """The field shelf: what can be sliced, and what each thing means.
@@ -280,7 +769,7 @@ def cube_schema() -> JSONResponse:
     return envelope(
         "Fact constellation",
         payload,
-        _Queries(con()),
+        _Queries(None),
         ms=(time.perf_counter() - started) * 1000.0,
         note=(
             "Dimensions name groups of rows; measures are numbers computed over "
@@ -1210,7 +1699,7 @@ def brief(q: str = Query(..., min_length=1)) -> JSONResponse:
     return envelope(
         "Text mining",
         payload,
-        _Queries(con()),
+        _Queries(None),
         ms=(time.perf_counter() - started) * 1000.0,
         note=(
             "A brief that cannot confidently resolve a name says so and offers "
@@ -1235,7 +1724,7 @@ def insights() -> JSONResponse:
     return envelope(
         "Text mining",
         payload,
-        _Queries(con()),
+        _Queries(None),
         ms=(time.perf_counter() - started) * 1000.0,
         note=payload.get("withheld") and
         "Cards below the evidence floor are listed in `withheld`, not dropped silently."
