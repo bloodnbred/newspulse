@@ -34,10 +34,41 @@ export interface Kpi { id: string; label: string; value: number; decimals?: numb
 export interface TapeItem { label: string; value: string; change: number }
 export interface SeriesPoint { date: string; newsHeat: number; nifty: number }
 export interface EventMark { date: string; label: string; type: string }
-export interface SectorHeat { sector: string; newsCount: number; heatZ: number; avgReturnPct: number }
+export interface SectorHeat {
+  /* snake_case, because this is what `/ui/home` actually returns. The pack's
+     `types.ts` declared `newsCount` / `avgReturnPct` in camelCase while every
+     other field in this file and every other endpoint in the project is
+     snake_case, so a camelCase interface here would type-check against nothing
+     and render `undefined`. The server is the source of truth. */
+  sector: string;
+  news_count: number;
+  heat_z: number | null;
+  avg_return_pct: number;
+}
 export interface SurpriseDay {
-  date: string; sector: string; kind: 'news_driven' | 'quiet_news_move';
-  newsZ: number; absReturnZ: number; avgReturnPct: number;
+  sector: string;
+  session: string;
+  kind: 'news_driven' | 'quiet_news_move';
+  news_heat_z: number;
+  abs_return_z: number;
+  avg_return: number;
+}
+/** One calendar-heat cell. `is_trading_day` matters: 32.4% of in-window
+ *  headlines fall on a day the market was closed, and a calendar that cannot
+ *  tell those apart shows holidays as quiet market days. */
+export interface DayCell {
+  date: string;
+  value: number;
+  day_of_week: number;
+  is_trading_day: boolean;
+}
+/** One row of the Time Machine series, as `/ui/home` returns it. */
+export interface SeriesPointFull {
+  date: string;
+  headlines: number;
+  sentiment: number;
+  sensational: number;
+  nifty: number | null;
 }
 export interface InsightCard {
   id: string; title: string; text: string; concept: Concept; page: string;

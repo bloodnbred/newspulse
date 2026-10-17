@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { CalendarClock, Database, FileSearch, Home, Layers, LineChart, Network, Sparkles } from 'lucide-react';
 import { Ticker } from './Ticker';
+import { FilterBar } from './FilterBar';
 import { IS_MOCK, useApi } from '../lib/api';
 import type { TapeItem } from '../types';
 
@@ -18,9 +19,13 @@ const NAV = [
 
 const linkClass = ({ isActive }: { isActive: boolean }) => `nav-link ${isActive ? 'active' : ''}`;
 
-/** filterBar: pass the global filter bar component once it is built (phase U3). */
+/** The global filter bar is rendered above every route except the placeholder
+ *  pages, which have nothing to filter yet. `filterBar` remains a prop so a
+ *  future shell-level chrome can override it. */
 export function AppShell({ filterBar }: { filterBar?: ReactNode }) {
   const tape = useApi<TapeItem[]>('/ui/tape', {}, { withFilters: false });
+  const location = useLocation();
+  const showFilters = location.pathname === '/';
   return (
     <div className="min-h-full">
       <div className="mesh-bg" aria-hidden="true" />
@@ -38,7 +43,7 @@ export function AppShell({ filterBar }: { filterBar?: ReactNode }) {
           ))}
         </nav>
         <main className="flex-1 min-w-0 p-4 md:p-6 pb-24 md:pb-6">
-          {filterBar}
+          {filterBar ?? (showFilters ? <FilterBar /> : null)}
           <Outlet />
           <footer className="mt-8 text-xs" style={{ color: 'var(--muted)' }}>
             Educational project, not investment advice. Patterns shown are associations, not causes.

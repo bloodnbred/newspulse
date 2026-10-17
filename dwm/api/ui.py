@@ -212,6 +212,20 @@ def envelope(
     )
 
 
+def _mood_label(percentile: float) -> str:
+    """Three coarse bands, chosen so the gauge is not claiming precision.
+
+    A dial with ten labelled zones would imply the difference between 61 and 63
+    is meaningful. It is not: the percentile is one rank in a distribution of
+    daily headline counts, and three words say what a reader can act on.
+    """
+    if percentile < 34:
+        return "Calm"
+    if percentile < 67:
+        return "Active"
+    return "Heated"
+
+
 def _window() -> tuple[str, str]:
     """The corpus window, read from the data rather than hard-coded.
 
@@ -377,38 +391,81 @@ def _build_home() -> JSONResponse:
             [start, end],
         )
 
-        # --- market mood: the last 20 sessions against their own history ---
-        # A percentile, not a level. "News is 4% above its monthly average"
-        # means something; a bare index does not.
+        # --- market mood: recent news heat against its own history ---
+        # A percentile of the mean of the last 20 sessions, measured within the
+        # distribution of ALL daily totals.
+        #
+        # The first version counted how many days matched the single busiest
+        # day, which is 1 in ~1800 and read "0.1th percentile" - a number that
+        # was arithmetically correct and completely meaningless. A mood has to
+        # answer "how busy is it NOW, for this corpus", so `recent` is a window
+        # and the comparison is a rank in a distribution.
         mood = q.one(
             """
             WITH daily AS (
-                SELECT date_key,
-                       sum(news_count_non_market) AS news
+                SELECT date_key, sum(news_count_non_market) AS news
                 FROM fact_news_sector_daily GROUP BY 1
             ),
-            ranked AS (
-                SELECT news, percent_rank() OVER (ORDER BY news) AS p
-                FROM daily
+            recent AS (
+                SELECT avg(news) AS level FROM (
+                    SELECT news FROM daily ORDER BY date_key DESC LIMIT 20
+                )
             )
-            SELECT round(100.0 * (
-                       SELECT count(*) FROM daily d
-                       WHERE d.news >= (SELECT max(news) FROM daily)
-                   ) / nullif((SELECT count(*) FROM daily), 0), 1) AS percentile
-            """,
+            SELECT round(100.0 * sum(CASE WHEN d.news <= (SELECT level FROM recent)
+                                         THEN 1 ELSE 0 END)
+                         / nullif(count(*), 0), 1) AS percentile,
+                   (SELECT level FROM recent) AS recent_level
+            FROM daily d
+            """
         )
 
+        # Aliased to the names `EventMark` declares in web-scaffold/src/types.ts.
+        # The dimension's own columns are `start_date` and `event_label`, and
+        # returning those unchanged produced a payload where `date` was
+        # undefined - which the calendar crashed on, blanking the entire page.
+        # A front end should not have to know the dimension's column names.
         events = q.rows(
-            "SELECT event_key, event_label, event_type, start_date FROM dim_event ORDER BY start_date"
+            """
+            SELECT start_date AS date, event_label AS label, event_type AS type,
+                   event_key
+            FROM dim_event ORDER BY start_date
+            """
         )
+        # `heat_z` is each sector's news volume scored against its OWN history,
+        # which is the only comparison that means anything across ten sectors of
+        # very different sizes. It is a z over the sector's monthly series - the
+        # same shape as the z in mining_surprise_days, and the treemap's tooltip
+        # says so rather than presenting it as a market-wide measure.
         sector_heat = q.rows(
             """
+            WITH per_sector AS (
+                SELECT sector_key, news_count,
+                       avg(news_count) OVER (
+                         PARTITION BY sector_key ORDER BY year, month
+                         ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
+                       ) AS rolling_mean,
+                       stddev_samp(news_count) OVER (
+                         PARTITION BY sector_key ORDER BY year, month
+                         ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
+                       ) AS rolling_sd
+                FROM cube_sector_month
+            ),
+            agg AS (
+                SELECT sector_key,
+                       sum(news_count) AS total_news,
+                       round(avg(news_count - rolling_mean)
+                             / nullif(avg(rolling_sd), 0), 2) AS heat_z
+                FROM per_sector GROUP BY sector_key
+            )
             SELECT s.sector_name AS sector,
-                   sum(c.news_count) AS news_count,
+                   a.total_news AS news_count,
+                   a.heat_z,
                    round(sum(c.sum_return) / nullif(sum(c.stock_obs), 0), 4) AS avg_return_pct
             FROM cube_sector_month c
             JOIN dim_sector s ON s.sector_key = c.sector_key
-            GROUP BY 1 ORDER BY news_count DESC
+            JOIN agg a ON a.sector_key = c.sector_key
+            GROUP BY 1, 2, 3
+            ORDER BY news_count DESC
             """
         )
         surprise = []
@@ -441,6 +498,7 @@ def _build_home() -> JSONResponse:
     ]
 
     ms = (time.perf_counter() - started) * 1000.0
+    _mood_pct = float(mood["percentile"]) if mood and mood["percentile"] is not None else 50.0
     # One sparkline series per KPI, monthly, so the card can draw it without a
     # second request. Every KPI therefore reports over the SAME months.
     spark = [float(r["headlines"]) for r in monthly_news]
@@ -465,9 +523,13 @@ def _build_home() -> JSONResponse:
              "spark": [], "href": "/mining"},
         ],
         "mood": {
-            "score": mood["percentile"] if mood and mood["percentile"] is not None else 50.0,
-            "label": "Calm",
-            "percentile": mood["percentile"] if mood and mood["percentile"] is not None else 50.0,
+            "score": _mood_pct,
+            # The label is derived here rather than left to the front end, so
+            # the band that a number falls into is decided in one place and the
+            # gauge cannot disagree with the caption.
+            "label": _mood_label(_mood_pct),
+            "percentile": _mood_pct,
+            "recent_level": round(float(mood["recent_level"] or 0), 1) if mood else None,
         },
         "main": main,
         "events": events,
@@ -882,6 +944,76 @@ def etl() -> JSONResponse:
         ms=(time.perf_counter() - started) * 1000.0,
         note=data["caveat"],
     )
+
+
+@router.get("/ui/sectors")
+def sectors() -> JSONResponse:
+    """Every sector, for the filter bar.
+
+    Not in the contract's table, but addendum rule 1 says the web app talks only
+    to `/ui/*`, and the filter bar cannot call the v2 `/sectors` and call that
+    compliant. Thin alias over the same dimension rather than a second query.
+    """
+    started = time.perf_counter()
+    if not _has("dim_sector"):
+        return _not_built("dim_sector", "python -m dwm build")
+    with reading() as c:
+        q = _Queries(c)
+        rows = q.rows(
+            """
+            SELECT s.sector_key, s.sector_name,
+                   count(d.stock_key) AS constituents,
+                   count(*) FILTER (WHERE d.is_survivor) AS survivors,
+                   count(*) FILTER (WHERE d.price_source IS NOT NULL) AS with_prices
+            FROM dim_sector s LEFT JOIN dim_stock d ON d.sector_key = s.sector_key
+            GROUP BY 1, 2 ORDER BY 2
+            """
+        )
+    return envelope(
+        "Fact constellation",
+        rows,
+        q,
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "Constituents are today's Nifty 50 list applied to a 2015-2020 "
+            "window. Companies that were constituents in the window and have "
+            "since been removed are absent, and some present members listed "
+            "after the window opened."
+        ),
+    )
+
+
+@router.get("/ui/brief")
+def brief(q: str = Query(..., min_length=1)) -> JSONResponse:
+    """Quick Brief for a company or sector, for the hero search.
+
+    Calls `dwm.inference.brief.build` rather than reimplementing it, so the
+    hero search and the existing `/brief` route cannot disagree about the same
+    company - two queries for one paragraph is two paragraphs, and only one of
+    them would be reviewed.
+    """
+    started = time.perf_counter()
+    if not _has("dim_stock"):
+        return _not_built("dim_stock", "python -m dwm ingest --dataset stocks")
+    with reading() as c:
+        payload = build_brief(c, q)
+    return envelope(
+        "Text mining",
+        payload,
+        _Queries(con()),
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "A brief that cannot confidently resolve a name says so and offers "
+            "alternatives rather than guessing. A confident paragraph about the "
+            "wrong company is worse than no answer at all."
+        ),
+    )
+
+
+def build_brief(connection: duckdb.DuckDBPyConnection, q: str) -> dict[str, Any]:
+    from dwm.inference.brief import build
+
+    return build(connection, q)
 
 
 @router.get("/ui/insights")

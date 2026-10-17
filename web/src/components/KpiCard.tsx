@@ -41,7 +41,11 @@ export function KpiCard({ kpi, index = 0, accent = 'var(--news)', onClick }: Pro
       onKeyDown={(e) => { if (clickable && (e.key === 'Enter' || e.key === ' ')) onClick?.(); }}
     >
       <div className="text-[11px] uppercase tracking-widest" style={{ color: 'var(--muted)' }}>{kpi.label}</div>
-      <div className="mono text-3xl font-semibold mt-1">
+      {/* `break-all` and a two-step size: "11,13,427" is eleven characters and a
+          fixed 3xl overflowed the card at the width a laptop splits the grid
+          into six columns, clipping the headline figure to "11,13,4". The count
+          is the point of the card, so it shrinks rather than truncating. */}
+      <div className="mono text-[26px] leading-tight xl:text-3xl font-semibold mt-1 break-all">
         {fmtNum(shown, kpi.decimals ?? 0)}
         {kpi.unit && <span className="text-base ml-1" style={{ color: 'var(--muted)' }}>{kpi.unit}</span>}
       </div>

@@ -50,6 +50,8 @@ UI_PATHS = [
     "/ui/schema",
     "/ui/etl",
     "/ui/insights",
+    "/ui/sectors",
+    "/ui/brief?q=rel",
     "/ui/day/2020-03-23",
 ]
 
@@ -78,12 +80,16 @@ def test_every_ui_response_is_an_envelope(client, path: str) -> None:
     assert meta["concept"], f"{path} reports no DWM concept"
 
 
-@pytest.mark.parametrize("path", [p for p in UI_PATHS if p not in ("/ui/insights", "/ui/home")])
+@pytest.mark.parametrize(
+    "path",
+    [p for p in UI_PATHS if p not in ("/ui/insights", "/ui/home", "/ui/brief?q=rel")],
+)
 def test_sql_backed_endpoints_carry_the_sql_they_ran(client, path: str) -> None:
-    """`/ui/insights` is Python rather than SQL, and `/ui/home` wraps several.
+    """`/ui/insights` and `/ui/brief` are Python rather than one query, and
+    `/ui/home` wraps several.
 
-    Everything else ran a query, and the drawer on that chart is only worth
-    opening if it shows the real statement.
+    Everything else ran a statement, and the drawer on that chart is only worth
+    opening if it shows the real one.
     """
     meta = client.get(path).json()["meta"]
     sql = meta.get("sql")
@@ -386,3 +392,111 @@ def test_the_sector_palette_avoids_the_semantic_hues() -> None:
         f"(semantic: {semantic}); a category will read as a meaning"
     )
     assert len(palette) >= 8, f"only {len(palette)} distinct sector colours for 10 sectors"
+
+
+# ---------------------------------------------------------------------------
+# U3: the endpoints the Home page added, and the field names it binds to
+# ---------------------------------------------------------------------------
+
+
+def test_events_use_the_names_the_front_end_declares(client) -> None:
+    """Regression: the calendar crashed on `e.date.slice` and blanked the page.
+
+    `dim_event` calls them `start_date` and `event_label`; `EventMark` in
+    types.ts declares `date` and `label`. The first `/ui/home` returned the
+    dimension's own column names, so `date` was `undefined` and
+    `events.map((e) => e.date.slice(0, 10))` threw inside a `useMemo` -
+    which unmounted the whole page, not just the calendar.
+
+    The right fix is in the SQL, not in the component: a front end should not
+    have to know a dimension's column names, and a defensive `?? ''` would only
+    have traded a crash for a calendar with no events in it.
+    """
+    events = client.get("/ui/home").json()["data"]["events"]
+    assert events, "no events; the Time Machine flags nothing"
+    for event in events:
+        assert set(event) >= {"date", "label", "type"}, (
+            f"event {event} does not carry the names EventMark declares"
+        )
+        # Not merely present: usable. A null here throws the same way.
+        assert isinstance(event["date"], str) and len(event["date"]) == 10, (
+            f"event date must be an ISO day, got {event['date']!r}"
+        )
+        assert isinstance(event["label"], str) and event["label"], "an unlabelled flag"
+
+
+def test_sector_heat_carries_the_z_score_its_tooltip_quotes(client) -> None:
+    """`SectorHeat` declares `heat_z: number | null` and the treemap tooltip
+    prints it, so a payload without the key renders "undefined" in a sentence.
+
+    It is also the number that makes the treemap honest: raw volume ranks a
+    large sector above a small one forever, and the z is scored against each
+    sector's own twelve-month history.
+    """
+    rows = client.get("/ui/home").json()["data"]["sectorHeat"]
+    assert rows, "no sector rows; the treemap would be empty"
+    for row in rows:
+        assert set(row) == {"sector", "news_count", "heat_z", "avg_return_pct"}, (
+            f"sectorHeat row keys changed: {sorted(row)}"
+        )
+        assert row["news_count"] > 0
+        # `null` is allowed by the type (a sector with a flat history has no
+        # standard deviation), so only the type is asserted, not the value.
+        assert row["heat_z"] is None or isinstance(row["heat_z"], (int, float))
+
+
+def test_the_mood_percentile_is_a_rank_not_a_tally(client) -> None:
+    """Regression: the first mood query read "0.1th percentile".
+
+    It counted how many days matched the single busiest day, which is one day
+    in ~1800. Arithmetically a percentage, semantically nothing. A percentile
+    has to be a rank in a distribution, and for a distribution of daily headline
+    counts the busiest day is the top hundredth of one percent - so a result
+    that low means the query is still counting days instead of ranking them.
+    """
+    mood = client.get("/ui/home").json()["data"]["mood"]
+    assert 2.0 <= mood["percentile"] <= 100.0, (
+        f"mood percentile {mood['percentile']} is not a plausible rank; "
+        "check that the query ranks days rather than counting ties"
+    )
+    assert mood["label"] in {"Calm", "Active", "Heated"}, (
+        f"mood label {mood['label']!r} is not one of the three derived bands"
+    )
+    assert mood["recent_level"] is not None and mood["recent_level"] > 0
+
+
+def test_sectors_answers_for_the_filter_bar(client) -> None:
+    """The filter bar is the one control every page shares, and it cannot call
+    the v2 `/sectors` and claim to follow addendum rule 1."""
+    data = client.get("/ui/sectors").json()["data"]
+    assert len(data) >= 8, f"only {len(data)} sectors in dim_sector"
+    for row in data:
+        assert set(row) >= {"sector_key", "sector_name", "constituents"}
+    meta = client.get("/ui/sectors").json()["meta"]
+    assert "constituent" in meta["note"].lower(), (
+        "the survivorship caveat must ride with the sector list; it is the only "
+        "constituent list available and it is today's applied to a 2015 window"
+    )
+
+
+def test_brief_resolves_a_company_or_says_it_cannot(client) -> None:
+    """`/ui/brief` backs the hero search. Rule 1 and the quick-brief rule both
+    say the same thing: an unresolved name is reported, never guessed."""
+    hit = client.get("/ui/brief", params={"q": "Reliance"}).json()["data"]
+    assert hit["kind"] == "stock", f"a known company came back as {hit['kind']!r}"
+    assert hit.get("name"), "a known company produced no name"
+    assert hit.get("paragraphs"), "a resolved brief produced no text"
+    assert hit.get("caveats"), (
+        "a brief without its caveats is the plain-language rule broken: the "
+        "reader is told the numbers without being told what they do not cover"
+    )
+
+    miss = client.get("/ui/brief", params={"q": "Zzqq Not A Company"}).json()["data"]
+    assert miss["kind"] == "none", (
+        f"an unknown name resolved to {miss['kind']!r}; the brief is guessing"
+    )
+    assert not miss.get("name"), "an unmatched brief still carries a name"
+    assert miss.get("message"), "an unmatched brief must say so in words"
+    assert miss.get("did_you_mean"), (
+        "an unmatched brief must offer a way forward, not a dead end"
+    )
