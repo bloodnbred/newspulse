@@ -38,7 +38,7 @@ from decimal import Decimal
 from typing import Any
 
 import duckdb
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, Query
 from fastapi.responses import JSONResponse
 
 from dwm.api import store
@@ -258,6 +258,216 @@ def _has(table: str) -> bool:
     from dwm.api.v2 import _has as v2_has
 
     return v2_has(table)
+
+
+# ---------------------------------------------------------------------------
+# /ui/cube - the slicing engine behind Cube Studio
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ui/cube/schema")
+def cube_schema() -> JSONResponse:
+    """The field shelf: what can be sliced, and what each thing means.
+
+    Not cached. It is a few kilobytes of static descriptions, and a shelf that
+    is a minute stale after a rebuild is worse than one that is not.
+    """
+    started = time.perf_counter()
+    from dwm.olap.cube_studio import shelf
+
+    payload = shelf()
+    payload["operations"] = OPERATION_CHIPS
+    return envelope(
+        "Fact constellation",
+        payload,
+        _Queries(con()),
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "Dimensions name groups of rows; measures are numbers computed over "
+            "each group. The two cubes have different grains and cannot be "
+            "sliced together - the engine refuses that rather than multiplying "
+            "headline counts by the number of stocks."
+        ),
+    )
+
+
+#: The six OLAP operations, each in one line, each naming the zone it uses.
+#: These are the classical terms, so they are explained rather than assumed -
+#: but the explanation is a sentence, not a lecture, and it says what the
+#: operation does to THIS view rather than what it does in general.
+OPERATION_CHIPS: list[dict[str, str]] = [
+    {
+        "id": "slice",
+        "label": "Slice",
+        "blurb": "Fix one dimension member and look inside it.",
+        "zones": ["filters"],
+        "hint": "Put one value in Filters - a single year, or a single topic.",
+    },
+    {
+        "id": "dice",
+        "label": "Dice",
+        "blurb": "Fix several dimension members at once.",
+        "zones": ["filters"],
+        "hint": "Choose several values on the same filter.",
+    },
+    {
+        "id": "roll_up",
+        "label": "Roll-up",
+        "blurb": "Remove the finest dimension and aggregate what is left.",
+        "zones": ["rows", "columns"],
+        "hint": "Take Month off the axis and put Quarter or Year on it.",
+    },
+    {
+        "id": "drill_down",
+        "label": "Drill-down",
+        "blurb": "Add a finer dimension to an existing view.",
+        "zones": ["rows", "columns"],
+        "hint": "Put Month on the axis beneath Year.",
+    },
+    {
+        "id": "pivot",
+        "label": "Pivot",
+        "blurb": "One measure across two dimensions, as a grid.",
+        "zones": ["rows", "columns", "values"],
+        "hint": "Rows and Columns each carry a dimension; Values carries the measure.",
+    },
+    {
+        "id": "cube",
+        "label": "Cube",
+        "blurb": "Every grouping of a small dimension set, in one pass.",
+        "zones": ["rows", "columns", "values"],
+        "hint": "Add a third axis, or read the totals row for the whole slice.",
+    },
+]
+
+
+@router.post("/ui/cube/query")
+def cube_query(payload: dict[str, Any] = Body(...)) -> JSONResponse:
+    """Slice a cube by whatever the reader put in the zones.
+
+    A POST because a spec is a structure - four lists and a filter object - and
+    a GET would have to flatten it into query parameters and then parse it back
+    into the same structure. Nothing here reaches SQL as text: field ids resolve
+    to expressions written in `dwm.olap.cube_studio`, and filter values are
+    bound parameters.
+    """
+    from dwm.olap.cube_studio import CUBES, CubeError, parse_spec, run
+
+    started = time.perf_counter()
+    cube_id = str(payload.get("cube") or "news")
+    cube = CUBES.get(cube_id)
+    if cube is not None and not _has("cube_day_topic" if cube.is_cube else "fact_stock_daily"):
+        return _not_built(
+            "cube_day_topic" if cube.is_cube else "fact_stock_daily",
+            "python -m dwm build",
+        )
+
+    try:
+        spec = parse_spec(payload)
+    except CubeError as exc:
+        return JSONResponse(
+            status_code=exc.status,
+            content={"detail": str(exc)},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    with reading() as c:
+        result = run(c, spec, _window())
+
+    # The engine recorded the two statements it ran. They go into `meta.sql` by
+    # hand rather than through `_Queries`, because they were built from
+    # whitelisted expressions and already normalised - running them through
+    # `_Queries.rows` would run them a second time.
+    notes = list(result.notes)
+    body = {
+        "cube": result.cube,
+        "columns": result.columns,
+        "rows": result.rows,
+        "totals": result.totals,
+        "truncated": any("Only the first" in n for n in notes),
+        "spec": {
+            "rows": spec.rows,
+            "columns": spec.columns,
+            "measures": spec.measures,
+            "filters": spec.filters,
+            "orderBy": spec.order_by,
+            "descending": spec.descending,
+        },
+    }
+    ms = (time.perf_counter() - started) * 1000.0
+    meta: dict[str, Any] = {
+        "concept": "Fact constellation",
+        "ms": round(ms, 2),
+        "rows": len(result.rows),
+        "sql": "\n\n-- totals over the same filter, without the axes:\n\n".join(
+            result.sql
+        ),
+    }
+    if notes:
+        meta["note"] = " ".join(notes)
+    return JSONResponse(
+        content={"data": _jsonable(body), "meta": _jsonable(meta)},
+        headers={"Cache-Control": CACHE_CONTROL},
+    )
+
+
+@router.get("/ui/cube/headlines")
+def cube_headlines(
+    topic: str | None = None,
+    year: int | None = None,
+    month: str | None = None,
+    limit: int = Query(50, ge=1, le=50),
+) -> JSONResponse:
+    """The headlines behind one cell, capped at 50.
+
+    Rule 21 caps a headline list at 50 rows, and the cap is the API's, not the
+    page's - a limit the browser can raise is a limit that will be raised.
+    """
+    started = time.perf_counter()
+    if not _has("fact_headline"):
+        return _not_built("fact_headline", "python -m dwm etl")
+
+    predicates = ["h.in_window", "h.publish_date BETWEEN ? AND ?"]
+    params: list[Any] = list(_window())
+    if topic:
+        predicates.append("tp.topic_name = ?")
+        params.append(topic)
+    if year:
+        predicates.append("d.year_no = ?")
+        params.append(year)
+    if month:
+        predicates.append("d.year_month = ?")
+        params.append(month)
+
+    with reading() as c:
+        q = _Queries(c)
+        rows = q.rows(
+            f"""
+            SELECT h.headline_id, h.publish_date, tp.topic_name AS topic,
+                   h.headline_text,
+                   h.sentiment_compound, h.sensational_score,
+                   h.is_sensational, h.is_risk_signal, h.word_count
+            FROM fact_headline h
+            JOIN dim_date  d  ON d.date_key  = h.date_key
+            JOIN dim_topic tp ON tp.topic_key = h.topic_key
+            WHERE {" AND ".join(predicates)}
+            ORDER BY h.sensational_score DESC, h.publish_date DESC
+            LIMIT ?
+            """,
+            [*params, limit],
+        )
+    return envelope(
+        "Text mining",
+        rows,
+        q,
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "Ranked by sensationalism score, so this is the most striking slice "
+            "of the cell and not a random or a representative one. The count "
+            "behind the cell is the measure in the table; these 50 rows are a "
+            "look, not a sample."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -70,6 +70,89 @@ export interface SeriesPointFull {
   sensational: number;
   nifty: number | null;
 }
+
+/* -------------------------------------------------------------------------
+ * Cube Studio. These mirror `dwm/olap/cube_studio.py`; the field ids are the
+ * contract between the shelf and the engine, and a typo in either place shows up
+ * as an empty zone rather than an error.
+ * ---------------------------------------------------------------------- */
+
+export type CubeUnit = 'label' | 'year' | 'count' | 'ratio' | 'pct' | 'score' | 'points';
+
+export interface CubeField {
+  id: string;
+  label: string;
+  kind: 'dimension' | 'measure';
+  /** One sentence on what this is and, where it matters, what it is not. */
+  description: string;
+  unit: CubeUnit;
+  /** True for a band computed from a measure rather than read from a dimension. */
+  derived: boolean;
+  cube: string;
+}
+
+export interface CubeShelfEntry {
+  id: string;
+  label: string;
+  grain: string;
+  is_cube: boolean;
+  notes: string[];
+  dimensions: CubeField[];
+  measures: CubeField[];
+}
+
+export interface OperationChip {
+  id: string;
+  label: string;
+  blurb: string;
+  zones: string[];
+  hint: string;
+}
+
+export interface CubeSchema {
+  cubes: CubeShelfEntry[];
+  operations: OperationChip[];
+}
+
+/** One cell of the result. Keys are field ids, so a cell is readable only
+ *  through the shelf - which is the point, because the alternative is a
+ *  `Record<string, unknown>` that silently accepts a typo. */
+export type CubeRow = Record<string, string | number | null>;
+
+export interface CubeData {
+  cube: string;
+  columns: string[];
+  rows: CubeRow[];
+  /** Computed by a second statement, never by summing the cells. */
+  totals: CubeRow;
+  truncated: boolean;
+  spec: {
+    rows: string[];
+    columns: string[];
+    measures: string[];
+    filters: Record<string, unknown[]>;
+    orderBy: string | null;
+    descending: boolean;
+  };
+}
+
+export interface CubeHeadline {
+  headline_id: number;
+  publish_date: string;
+  topic: string;
+  headline_text: string;
+  sentiment_compound: number;
+  sensational_score: number;
+  is_sensational: boolean;
+  is_risk_signal: boolean;
+  word_count: number;
+}
+
+/** The four drop zones. Named after the operation vocabulary so the page can
+ *  say "Slice uses Filters" and mean something the reader can see. */
+export type CubeZone = 'rows' | 'columns' | 'values' | 'filters';
+
+export type CubeViewKind = 'table' | 'heatmap' | 'bars' | 'treemap';
 export interface InsightCard {
   id: string; title: string; text: string; concept: Concept; page: string;
   evidence: Record<string, number | string>;
