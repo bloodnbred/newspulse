@@ -65,6 +65,12 @@ app.add_middleware(
         "http://localhost:8501", "http://127.0.0.1:8501",
         "http://localhost:8000", "http://127.0.0.1:8000",
         "http://localhost:3000", "http://127.0.0.1:3000",
+        # The Vite dev server for the React front end (web/, port 5173). The
+        # web app reads the API cross-origin from localhost:5173, so without
+        # this every request is blocked and the app shows an error instead of
+        # data. Both spellings are listed because Vite serves on localhost and
+        # browsers treat it and 127.0.0.1 as different origins.
+        "http://localhost:5173", "http://127.0.0.1:5173",
     ],
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
@@ -386,6 +392,14 @@ def ui_manifest() -> dict[str, Any]:
 from dwm.api.v2 import router as v2_router  # noqa: E402
 
 app.include_router(v2_router)
+
+# The /ui backend-for-frontend router, for the React front end in web/.
+# Mounted before the static mount too: `/ui/charts` and `/ui/manifest` are v1
+# routes, and `/ui/home` is the new one, and none of them may be shadowed by
+# the file mount that follows.
+from dwm.api.ui import router as ui_router  # noqa: E402
+
+app.include_router(ui_router)
 
 
 # The static front end, mounted last so every API route above wins the match.

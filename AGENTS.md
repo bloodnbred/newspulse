@@ -94,6 +94,11 @@ pytest
 17. **The dashboard talks to the API only.** All analytics live in `dwm/`, not in `dashboard/`. No SQL, no pandas analytics, no model code in dashboard files. New dashboard data comes from a new endpoint in `dwm/api/`, consumed through the `/ui/manifest` payload.
 18. **Every dashboard page must have:** a question box (the question it answers + the decision it supports), at least one chart with a title, labelled axes and a data-generated caption, a "how this was computed" panel naming the DWM concept, and the footer disclaimer.
 19. **Design rules.** The palette already exists in `dashboard/static/app.css` and is mirrored for Vega-Lite in `dashboard/helpers.py` (`CHART_PALETTE`); `tests/test_ui.py` asserts the two agree. **Do not introduce a new hue.** The v2 pack's teal/amber were dropped for this reason.
+    - **SUPERSEDED for the React front end (phase U1+).** `web-scaffold/src/styles/tokens.css` defines a new semantic palette — `--news` teal, `--price` amber, `--mining` violet, `--up`/`--down` for direction — and `docs/UI-BLUEPRINT.md` §3 mandates it. That reverses this bullet **for `web/` only**. Two conditions attach, both asserted in `tests/test_u1_ui_router.py`:
+      1. **Semantic hues are reserved.** `SECTOR_COLORS` must not contain `--news`, `--price`, `--mining`, `--up` or `--down`. The UI pack's palette opened with exactly those first three, which would have painted sector one in "news" beside a series that means news. A categorical palette must never be a semantic one.
+      2. **Direction is still direction only.** `--up`/`--down` mean a return went up or down. Never "good news" / "bad news".
+
+      `dashboard/static/app.css` and the Vega-Lite theme keep the old palette untouched; the two front ends coexist and each has its own tests.
     - `--accent` is the only accent. In this product the subject is **news**, so news series use `--accent`.
     - **Price/market is the recessive series**: `--muted` (or `--faint` for a reference line), so the news reads as the subject and the market as context around it.
     - `--positive` / `--negative` carry direction only (up/down returns). Never decorative, never used for "good news" / "bad news".
