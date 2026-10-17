@@ -6,8 +6,24 @@ const BASE: string = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000';
 /** Dev-only: ?mock=1 reads public/mock/ui/*.json. The shell shows a red MOCK DATA ribbon. */
 export const IS_MOCK: boolean = new URLSearchParams(window.location.search).has('mock');
 
+/** A failed request, carrying the server's own hint.
+ *
+ *  Written with explicit fields rather than the shorthand
+ *  `constructor(public status: number, ...)` the pack used. TypeScript
+ *  "parameter properties" are not *erasable syntax* - they require a
+ *  transformation step to remove - and the Vite template's tsconfig sets
+ *  `erasableSyntaxOnly: true`, which makes `tsc` reject them outright. The
+ *  behaviour is identical and the class survives a switch to plain JS output. */
 export class ApiError extends Error {
-  constructor(public status: number, message: string, public hint?: string) { super(message); }
+  readonly status: number;
+  readonly hint: string | undefined;
+
+  constructor(status: number, message: string, hint?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.hint = hint;
+  }
 }
 
 function qs(params: Record<string, unknown>): string {

@@ -14,7 +14,6 @@ v1 routes are untouched. Every endpoint here follows the same three rules:
 
 from __future__ import annotations
 
-import threading
 from contextlib import contextmanager
 from typing import Any
 
@@ -37,24 +36,11 @@ MAX_HEADLINES = 50
 
 _CON = None
 
-#: One reader at a time on the shared handle.
-#:
-#: This exists because of a bug only a browser could find. FastAPI runs sync
-#: endpoints in a threadpool, and the dashboard fires several requests at once -
-#: `Promise.all` on the mood page hits `/olap/sector/drill-across` and
-#: `/ui/v2charts` simultaneously. DuckDB's `execute()` returns the connection
-#: itself and the result is read afterwards by `fetchone()`/`fetchall()`, so two
-#: threads interleave between those two calls and one of them reads the OTHER
-#: one's row. It surfaced as `TypeError: 'NoneType' object is not
-#: subscriptable` from inside `_has`, on a page that loads fine when the two
-#: requests happen to be issued one after the other.
-#:
-#: Per-request connections are not the fix, and were already ruled out: DuckDB
-#: caches connection objects per database path, which is why closing a handle per
-#: request used to break every other holder. One shared handle plus a lock is the
-#: arrangement that is actually safe. Queries here are milliseconds against a
-#: local snapshot, so serialising them costs nothing a reader can perceive.
-_LOCK = threading.RLock()
+#: The reader lock lives in `dwm.api.store`, next to the connection it guards,
+#: and `_reading()` below delegates to it. It was originally here, which left
+#: `store.py` unlocked - and every v1 route went on having the same defect that
+#: had just been fixed for v2. A lock that sits in one router is a lock that
+#: only protects one router.
 
 
 def _con():
@@ -85,12 +71,13 @@ def _reset_connection() -> None:
 def _reading():
     """Hold the shared handle for one complete read.
 
-    The whole query, not just the `execute()` call: the result is read in a
-    separate call, and locking only the first half is what let two requests
-    interleave in the first place.
+    Delegates to `store.reading()` rather than taking a lock of its own. The
+    lock belongs next to the connection, and when v2 held one while `store.py`
+    did not, the same interleaving was still reachable through every v1 route -
+    which is how `/health` once ran `SELECT count(*) FROM 2015-06-30`.
     """
-    with _LOCK:
-        yield _con()
+    with store.reading() as con:
+        yield con
 
 
 def _rows(sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:

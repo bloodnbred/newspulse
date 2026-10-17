@@ -4,7 +4,14 @@ import { fmtNum, fmtPct } from '../lib/format';
 import type { Kpi } from '../types';
 
 function Sparkline({ values, color }: { values: number[]; color: string }) {
-  if (values.length < 2) return <div className="h-9" />;
+  /* No placeholder gap when there is no series.
+   *
+   * A single count - 47 stocks, 331 surprise days - has no trend, and the pack
+   * reserved a fixed `h-9` for it anyway. That renders as a blank strip under
+   * the number, which reads as a chart that failed to load rather than as a
+   * figure that has no history to draw. Cards in the same row stretch to the
+   * tallest, so dropping the strip costs nothing in alignment. */
+  if (values.length < 2) return null;
   const w = 120, h = 34;
   const min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
   const pts = values

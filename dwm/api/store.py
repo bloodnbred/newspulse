@@ -20,9 +20,13 @@ from __future__ import annotations
 import contextlib
 import json
 import shutil
+import threading
+from collections.abc import Iterator
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+import duckdb
 
 from dwm.config import default_db_path, reports_dir
 from dwm.db import connect
@@ -134,7 +138,46 @@ def _open_connection():
     return connect(_read_only_settings())
 
 
+_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def reading() -> Iterator[duckdb.DuckDBPyConnection]:
+    """Hold the shared warehouse handle for one complete read.
+
+    THE LOCK LIVES HERE because this module owns the connection, and because
+    every router that reads the warehouse has to come through it.
+
+    `_open_connection()` is `@lru_cache`d, so every caller shares ONE handle.
+    And `con.execute()` returns the connection while the row is read by a
+    separate `fetchall()`/`fetchone()`, so two threads interleaving between
+    those two calls read each other's rows.
+
+    That is not hypothetical, and this module had the bug twice.
+
+    Once as a `TypeError: 'NoneType' object is not subscriptable`, and once -
+    worse, because it returned a well-formed answer - as
+    `ValueError: zip() argument 2 is shorter than argument 1`, meaning column
+    names from one query zipped onto rows from a different one.
+
+    And once on `/health`, as `SELECT count(*) FROM 2015-06-30`.
+    `table_counts()` lists table names and interpolates each into a `count(*)`.
+    A thread interleaved there handed it a `publish_date` value from a
+    concurrent request, and it built a query against a table called
+    "2015-06-30". The v2 and ui routers had been locked and this module had
+    not, so the same defect stayed live on every v1 route while looking fixed.
+    """
+    with _LOCK:
+        yield _open_connection()
+
+
 def connection():
+    """The raw shared handle.
+
+    Prefer `with reading() as con:`. This stays for callers outside this
+    module that have not been converted, and returning an UNLOCKED handle
+    is the trap: a lock that only some readers take protects nothing.
+    """
     return _open_connection()
 
 
@@ -191,15 +234,15 @@ def execute(operation: str, params: dict[str, Any] | None = None) -> dict[str, A
         raise KeyError(
             f"unknown operation {operation!r}; available: {sorted(OPERATIONS)}"
         )
-    con = connection()
-    return run_operation(con, operation, **(params or {}))
+    with reading() as con:
+        return run_operation(con, operation, **(params or {}))
 
 
 def topics() -> list[str]:
-    con = connection()
-    return [r[0] for r in con.execute(
-        "SELECT topic_name FROM dim_topic ORDER BY topic_name"
-    ).fetchall()]
+    with reading() as con:
+        return [r[0] for r in con.execute(
+            "SELECT topic_name FROM dim_topic ORDER BY topic_name"
+        ).fetchall()]
 
 
 def headline_sample(
@@ -210,76 +253,76 @@ def headline_sample(
     Paged rather than returned whole: the corpus is 3.1 million rows, and an
     endpoint that tried to serialise it would exhaust memory in the client.
     """
-    con = connection()
-    where = "WHERE f.in_window"
-    args: list[Any] = []
-    if topic:
-        # Bound parameter, never string-formatted into the SQL.
-        where += " AND t.topic_name = ?"
-        args.append(topic)
-    total = con.execute(
-        f"SELECT count(*) FROM fact_headline f "
-        f"JOIN dim_topic t ON t.topic_key = f.topic_key {where}",
-        args,
-    ).fetchone()[0]
-    rows = con.execute(
-        f"""
-        SELECT f.publish_date, t.topic_name, f.headline_text,
-               f.sentiment_compound, f.sentiment_band, f.sensational_score,
-               f.is_risk_signal, f.raw_category
-        FROM fact_headline f
-        JOIN dim_topic t ON t.topic_key = f.topic_key
-        {where}
-        ORDER BY f.publish_date DESC, f.headline_id
-        LIMIT ? OFFSET ?
-        """,
-        [*args, limit, offset],
-    ).fetchall()
-    columns = [
-        "publish_date", "topic", "headline_text", "sentiment_compound",
-        "sentiment_band", "sensational_score", "is_risk_signal", "raw_category",
-    ]
-    return {
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-        "rows": [dict(zip(columns, r, strict=True)) for r in rows],
-    }
+    with reading() as con:
+        where = "WHERE f.in_window"
+        args: list[Any] = []
+        if topic:
+            # Bound parameter, never string-formatted into the SQL.
+            where += " AND t.topic_name = ?"
+            args.append(topic)
+        total = con.execute(
+            f"SELECT count(*) FROM fact_headline f "
+            f"JOIN dim_topic t ON t.topic_key = f.topic_key {where}",
+            args,
+        ).fetchone()[0]
+        rows = con.execute(
+            f"""
+            SELECT f.publish_date, t.topic_name, f.headline_text,
+                   f.sentiment_compound, f.sentiment_band, f.sensational_score,
+                   f.is_risk_signal, f.raw_category
+            FROM fact_headline f
+            JOIN dim_topic t ON t.topic_key = f.topic_key
+            {where}
+            ORDER BY f.publish_date DESC, f.headline_id
+            LIMIT ? OFFSET ?
+            """,
+            [*args, limit, offset],
+        ).fetchall()
+        columns = [
+            "publish_date", "topic", "headline_text", "sentiment_compound",
+            "sentiment_band", "sensational_score", "is_risk_signal", "raw_category",
+        ]
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "rows": [dict(zip(columns, r, strict=True)) for r in rows],
+        }
 
 
 def monthly_series(topic: str | None = None) -> list[dict[str, Any]]:
     """Headline count and risk-signal rate per month, for the trend chart."""
-    con = connection()
-    where = "WHERE 1 = 1"
-    args: list[Any] = []
-    if topic:
-        where += " AND t.topic_name = ?"
-        args.append(topic)
-    rows = con.execute(
-        f"""
-        SELECT c.year_month,
-               sum(c.headline_count)                                  AS n,
-               sum(c.risk_signal_count)                               AS risk,
-               sum(c.sum_sentiment_compound)                          AS sent,
-               sum(c.sum_sensational_score)                           AS sens
-        FROM cube_month_topic c
-        JOIN dim_topic t ON t.topic_key = c.topic_key
-        {where}
-        GROUP BY 1 ORDER BY 1
-        """,
-        args,
-    ).fetchall()
-    return [
-        {
-            "year_month": r[0],
-            "headline_count": r[1],
-            # Means recomputed from the stored sums, never averaged again.
-            "risk_signal_rate": round(r[2] / r[1], 6) if r[1] else None,
-            "mean_sentiment": round(r[3] / r[1], 6) if r[1] else None,
-            "mean_sensational_score": round(r[4] / r[1], 6) if r[1] else None,
-        }
-        for r in rows
-    ]
+    with reading() as con:
+        where = "WHERE 1 = 1"
+        args: list[Any] = []
+        if topic:
+            where += " AND t.topic_name = ?"
+            args.append(topic)
+        rows = con.execute(
+            f"""
+            SELECT c.year_month,
+                   sum(c.headline_count)                                  AS n,
+                   sum(c.risk_signal_count)                               AS risk,
+                   sum(c.sum_sentiment_compound)                          AS sent,
+                   sum(c.sum_sensational_score)                           AS sens
+            FROM cube_month_topic c
+            JOIN dim_topic t ON t.topic_key = c.topic_key
+            {where}
+            GROUP BY 1 ORDER BY 1
+            """,
+            args,
+        ).fetchall()
+        return [
+            {
+                "year_month": r[0],
+                "headline_count": r[1],
+                # Means recomputed from the stored sums, never averaged again.
+                "risk_signal_rate": round(r[2] / r[1], 6) if r[1] else None,
+                "mean_sentiment": round(r[3] / r[1], 6) if r[1] else None,
+                "mean_sensational_score": round(r[4] / r[1], 6) if r[1] else None,
+            }
+            for r in rows
+        ]
 
 
 def market_daily(topic: str | None = None) -> dict[str, Any]:
@@ -301,51 +344,51 @@ def market_daily(topic: str | None = None) -> dict[str, Any]:
     if topic is None:
         topic = str(load_mining_config().get("market", {}).get("topic", "Business"))
     escaped = topic.replace("'", "''")
-    con = connection()
-    rows = con.execute(
-        f"""
-        WITH daily AS (
+    with reading() as con:
+        rows = con.execute(
+            f"""
+            WITH daily AS (
+                SELECT
+                    c.date_key,
+                    sum(c.headline_count)         AS n,
+                    sum(c.sum_sentiment_compound) AS sum_sent
+                FROM cube_day_topic c
+                JOIN dim_topic t ON t.topic_key = c.topic_key
+                WHERE t.topic_name = '{escaped}'
+                GROUP BY 1
+            )
             SELECT
-                c.date_key,
-                sum(c.headline_count)         AS n,
-                sum(c.sum_sentiment_compound) AS sum_sent
-            FROM cube_day_topic c
-            JOIN dim_topic t ON t.topic_key = c.topic_key
-            WHERE t.topic_name = '{escaped}'
-            GROUP BY 1
-        )
-        SELECT
-            m.trade_date,
-            daily.n,
-            m.volatility_20d,
-            m.return_pct,
-            daily.sum_sent / nullif(daily.n, 0) AS mean_sentiment
-        FROM fact_market_daily m
-        JOIN daily ON daily.date_key = m.date_key
-        WHERE m.volatility_20d IS NOT NULL AND daily.n > 0
-        ORDER BY m.trade_date
-        """
-    ).fetchall()
-    points = [
-        {
-            "trade_date": str(r[0]),
-            "headline_count": int(r[1]),
-            "volatility_20d": float(r[2]),
-            "return_pct": float(r[3]) if r[3] is not None else None,
-            "mean_sentiment": float(r[4]) if r[4] is not None else None,
+                m.trade_date,
+                daily.n,
+                m.volatility_20d,
+                m.return_pct,
+                daily.sum_sent / nullif(daily.n, 0) AS mean_sentiment
+            FROM fact_market_daily m
+            JOIN daily ON daily.date_key = m.date_key
+            WHERE m.volatility_20d IS NOT NULL AND daily.n > 0
+            ORDER BY m.trade_date
+            """
+        ).fetchall()
+        points = [
+            {
+                "trade_date": str(r[0]),
+                "headline_count": int(r[1]),
+                "volatility_20d": float(r[2]),
+                "return_pct": float(r[3]) if r[3] is not None else None,
+                "mean_sentiment": float(r[4]) if r[4] is not None else None,
+            }
+            for r in rows
+        ]
+        return {
+            "topic": topic,
+            "points": points,
+            "observations": len(points),
+            "note": (
+                "x is the natural log of that topic's daily headline count, which is "
+                "exactly what the reported correlation was computed on. A mean of "
+                "logs would differ slightly from the log of a mean."
+            ),
         }
-        for r in rows
-    ]
-    return {
-        "topic": topic,
-        "points": points,
-        "observations": len(points),
-        "note": (
-            "x is the natural log of that topic's daily headline count, which is "
-            "exactly what the reported correlation was computed on. A mean of "
-            "logs would differ slightly from the log of a mean."
-        ),
-    }
 
 
 def build_manifest() -> dict[str, Any]:
@@ -388,38 +431,51 @@ def build_manifest() -> dict[str, Any]:
 
 
 def table_counts() -> list[dict[str, Any]]:
-    """Every table and its row count, for the warehouse browser."""
-    con = connection()
-    names = [
-        r[0] for r in con.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'main' ORDER BY table_name"
-        ).fetchall()
-    ]
-    out = []
-    for name in names:
-        count = con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
-        out.append({"table": name, "rows": count})
+    """Every table and its row count, for the warehouse browser.
+
+    One locked read for the whole listing. It was previously: open a connection,
+    run the names query, close the fetch, then loop over the names running one
+    `count(*)` each with no lock - which is how a `publish_date` value once
+    reached the loop and produced `SELECT count(*) FROM 2015-06-30`.
+
+    The identifier is quoted as well. DuckDB accepts double-quoted identifiers,
+    so a name containing a hyphen or starting with a digit parses. Interpolation
+    of a catalogue-supplied name is safe here because the name cannot contain a
+    quote character, but quoting it means a future rename with a hyphen does not
+    turn into a parser error nobody can explain.
+    """
+    out: list[dict[str, Any]] = []
+    with reading() as con:
+        names = [
+            r[0] for r in con.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'main' ORDER BY table_name"
+            ).fetchall()
+        ]
+        for name in names:
+            safe = '"' + name.replace('"', '""') + '"'
+            count = con.execute(f"SELECT count(*) FROM {safe}").fetchone()[0]
+            out.append({"table": name, "rows": count})
     return out
 
 
 def audit_funnel(limit: int = 25) -> list[dict[str, Any]]:
-    con = connection()
-    columns = [
-        "run_id", "dataset_code", "step", "status",
-        "rows_read", "rows_loaded", "rows_rejected", "started_at", "finished_at",
-    ]
-    present = {
-        r[0] for r in con.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = 'etl_audit'"
+    with reading() as con:
+        columns = [
+            "run_id", "dataset_code", "step", "status",
+            "rows_read", "rows_loaded", "rows_rejected", "started_at", "finished_at",
+        ]
+        present = {
+            r[0] for r in con.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'etl_audit'"
+            ).fetchall()
+        }
+        if not present:
+            return []
+        selected = [c for c in columns if c in present]
+        rows = con.execute(
+            f"SELECT {', '.join(selected)} FROM etl_audit "
+            f"ORDER BY started_at DESC NULLS LAST LIMIT {int(limit)}"
         ).fetchall()
-    }
-    if not present:
-        return []
-    selected = [c for c in columns if c in present]
-    rows = con.execute(
-        f"SELECT {', '.join(selected)} FROM etl_audit "
-        f"ORDER BY started_at DESC NULLS LAST LIMIT {int(limit)}"
-    ).fetchall()
-    return [dict(zip(selected, r, strict=True)) for r in rows]
+        return [dict(zip(selected, r, strict=True)) for r in rows]

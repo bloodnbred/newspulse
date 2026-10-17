@@ -1,0 +1,53 @@
+{
+  "data": {
+    "devSample": true,
+    "window": { "start": "2015-06-30", "end": "2020-06-30" },
+    "kpis": [
+      { "id": "headlines", "label": "MOCK headlines analysed", "value": 1113427, "spark": [82000, 84500, 86100, 88000, 90200, 91500, 93400] },
+      { "id": "stocks", "label": "MOCK stocks tracked", "value": 47, "spark": [] },
+      { "id": "sessions", "label": "MOCK trading sessions", "value": 1229, "spark": [] },
+      { "id": "nifty", "label": "MOCK Nifty over the window", "value": -4.31, "decimals": 2, "unit": "%", "spark": [10120, 10240, 10080, 9930, 9760, 9810, 9680] },
+      { "id": "risk", "label": "MOCK risk-signal rate", "value": 3.31, "decimals": 2, "unit": "%", "spark": [] },
+      { "id": "surprise", "label": "MOCK surprise days found", "value": 331, "spark": [] }
+    ],
+    "mood": { "score": 62.0, "label": "Active", "percentile": 62.0 },
+    "main": [
+      { "date": "2016-01", "headlines": 84500, "sentiment": 0.021, "sensational": 3.1, "nifty": 10120 },
+      { "date": "2016-07", "headlines": 90200, "sentiment": 0.034, "sensational": 3.4, "nifty": 10240 },
+      { "date": "2017-01", "headlines": 88000, "sentiment": 0.018, "sensational": 3.0, "nifty": 10080 },
+      { "date": "2017-07", "headlines": 91500, "sentiment": -0.004, "sensational": 3.2, "nifty": 9930 },
+      { "date": "2018-01", "headlines": 93400, "sentiment": 0.009, "sensational": 3.3, "nifty": 9760 },
+      { "date": "2018-07", "headlines": 90200, "sentiment": -0.012, "sensational": 3.5, "nifty": 9810 }
+    ],
+    "events": [
+      { "date": "2016-11-08", "label": "MOCK demonetisation announced", "type": "policy" },
+      { "date": "2020-03-23", "label": "MOCK national lockdown announced", "type": "crisis" }
+    ],
+    "sectorHeat": [
+      { "sector": "MOCK Financial Services", "news_count": 18240, "heatZ": 1.8, "avg_return_pct": 0.42 },
+      { "sector": "MOCK Energy", "news_count": 14980, "heatZ": 1.2, "avg_return_pct": 0.18 },
+      { "sector": "MOCK IT", "news_count": 12610, "heatZ": 0.6, "avg_return_pct": 0.31 }
+    ],
+    "surprise": [
+      { "sector": "MOCK IT", "session": "2020-03-23", "kind": "quiet_news_move", "news_heat_z": -0.46, "abs_return_z": 5.29, "avg_return": -12.4 },
+      { "sector": "MOCK Energy", "session": "2020-03-23", "kind": "quiet_news_move", "news_heat_z": -0.18, "abs_return_z": 3.65, "avg_return": -9.8 }
+    ],
+    "insights": [
+      {
+        "id": "direction_honesty",
+        "title": "MOCK No, news does not tell you tomorrow's direction",
+        "text": "MOCK caution text standing in for the real one.",
+        "concept": "classification, chronological hold-out",
+        "page": "explore",
+        "evidence": { "accuracy": 0.499, "baseline_majority_class": 0.505 }
+      }
+    ]
+  },
+  "meta": {
+    "concept": "MOCK",
+    "ms": 0.0,
+    "rows": 6,
+    "mock": true,
+    "note": "DEV-ONLY MOCK. Every visible label is prefixed MOCK and the shell shows a red ribbon. The shape matches the real /ui/home envelope exactly, so swapping to the live endpoint is a URL change and nothing else. Addendum rule 3: never ship, never screenshot."
+  }
+}

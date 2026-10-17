@@ -1,0 +1,58 @@
+import type { ReactNode } from 'react';
+import { NavLink, Outlet } from 'react-router-dom';
+import { CalendarClock, Database, FileSearch, Home, Layers, LineChart, Network, Sparkles } from 'lucide-react';
+import { Ticker } from './Ticker';
+import { IS_MOCK, useApi } from '../lib/api';
+import type { TapeItem } from '../types';
+
+const NAV = [
+  { to: '/', label: 'Home', icon: Home },
+  { to: '/explore', label: 'Cube Studio', icon: Layers },
+  { to: '/stocks', label: 'Stock 360', icon: LineChart },
+  { to: '/events', label: 'Event Lab', icon: CalendarClock },
+  { to: '/mining', label: 'Mining Lab', icon: Network },
+  { to: '/headline', label: 'Headline Lab', icon: FileSearch },
+  { to: '/data', label: 'Data & Schema', icon: Database },
+  { to: '/insights', label: 'Insights', icon: Sparkles },
+];
+
+const linkClass = ({ isActive }: { isActive: boolean }) => `nav-link ${isActive ? 'active' : ''}`;
+
+/** filterBar: pass the global filter bar component once it is built (phase U3). */
+export function AppShell({ filterBar }: { filterBar?: ReactNode }) {
+  const tape = useApi<TapeItem[]>('/ui/tape', {}, { withFilters: false });
+  return (
+    <div className="min-h-full">
+      <div className="mesh-bg" aria-hidden="true" />
+      {IS_MOCK && <div className="mock-ribbon">MOCK DATA</div>}
+      <Ticker items={tape.data?.data ?? []} />
+      <div className="flex">
+        <nav className="hidden md:flex flex-col gap-1 w-56 shrink-0 p-3 sticky top-0 h-screen" aria-label="Main">
+          <div className="px-3 py-4 text-lg font-bold">
+            NewsPulse <span style={{ color: 'var(--news)' }}>Nifty</span>
+          </div>
+          {NAV.map(({ to, label, icon: Icon }) => (
+            <NavLink key={to} to={to} end={to === '/'} className={linkClass}>
+              <Icon size={18} aria-hidden="true" /> {label}
+            </NavLink>
+          ))}
+        </nav>
+        <main className="flex-1 min-w-0 p-4 md:p-6 pb-24 md:pb-6">
+          {filterBar}
+          <Outlet />
+          <footer className="mt-8 text-xs" style={{ color: 'var(--muted)' }}>
+            Educational project, not investment advice. Patterns shown are associations, not causes.
+            Headline signals measure writing style, not truth.
+          </footer>
+        </main>
+      </div>
+      <nav className="md:hidden fixed bottom-0 inset-x-0 glass flex justify-around py-2" aria-label="Mobile">
+        {NAV.slice(0, 5).map(({ to, label, icon: Icon }) => (
+          <NavLink key={to} to={to} end={to === '/'} className={linkClass} aria-label={label}>
+            <Icon size={20} aria-hidden="true" />
+          </NavLink>
+        ))}
+      </nav>
+    </div>
+  );
+}

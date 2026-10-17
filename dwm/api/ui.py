@@ -515,31 +515,31 @@ def tape() -> JSONResponse:
         # `NOT is_outlier` is rule 14 and is not optional here: five rows in the
         # corpus have moves above 25%, and a tape is exactly where a 250% day
         # would be shown largest.
+        #
+        # Two figures per sector, because a tape needs both: the move across the
+        # whole window (`value`, the level) and the last session (`change`, the
+        # daily delta). Returning the day's change in both fields made the tape
+        # print every number twice.
         rows = q.rows(
             """
             WITH sessions AS (
                 SELECT max(trade_date) AS latest FROM fact_stock_daily
-            ),
-            prev AS (
-                SELECT max(trade_date) AS d FROM fact_stock_daily
-                WHERE trade_date < (SELECT latest FROM sessions)
             )
             SELECT sec.sector_name AS sector,
+                   round(avg(f.return_pct), 3) AS window_pct,
                    round(avg(CASE WHEN f.trade_date = (SELECT latest FROM sessions)
                              THEN f.return_pct END), 3) AS latest_pct
             FROM fact_stock_daily f
             JOIN dim_stock st ON st.stock_key = f.stock_key
             JOIN dim_sector sec ON sec.sector_key = st.sector_key
-            WHERE NOT f.is_outlier
-              AND f.return_pct IS NOT NULL
-              AND f.trade_date IN ((SELECT latest FROM sessions), (SELECT d FROM prev))
-            GROUP BY 1 ORDER BY abs(latest_pct) DESC NULLS LAST
+            WHERE NOT f.is_outlier AND f.return_pct IS NOT NULL
+            GROUP BY 1 ORDER BY abs(window_pct) DESC NULLS LAST
             """
         )
     items = [
         {
             "label": r["sector"],
-            "value": f"{r['latest_pct']:+.2f}%" if r["latest_pct"] is not None else "n/a",
+            "value": f"{r['window_pct']:+.2f}%" if r["window_pct"] is not None else "n/a",
             "change": float(r["latest_pct"] or 0.0),
         }
         for r in rows
@@ -549,7 +549,12 @@ def tape() -> JSONResponse:
         items,
         q,
         ms=(time.perf_counter() - started) * 1000.0,
-        note="Sector mean return on the last trading session of the window, in percentage points.",
+        note=(
+            "Two figures per sector: `value` is the mean daily return across the "
+            "whole window and `change` is the last trading session, both in "
+            "percentage points and both excluding outlier rows. Neither is a "
+            "price - a sector has no price."
+        ),
     )
 
 

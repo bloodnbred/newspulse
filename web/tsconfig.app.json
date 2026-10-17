@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "esnext",
+    "types": ["vite/client"],
+    "allowArbitraryExtensions": true,
+    "skipLibCheck": true,
+
+    /* Strictness is ON, and the template shipped it OFF.
+     *
+     * docs/UI-BLUEPRINT.md §9 requires "TypeScript strict", and
+     * AGENTS_UI_ADDENDUM.md rule 11 makes "npm run build succeeds with no
+     * TypeScript errors" the definition of done. With `strict` absent that
+     * build passes on a great deal which should not compile - a mistyped prop,
+     * or a payload field no endpoint returns, becomes a silently `undefined`
+     * card instead of a failed build. `build` runs `tsc -b` first precisely so
+     * that this gate means something.
+     *
+     * `noUncheckedIndexedAccess` is on for the same reason. It is the flag that
+     * catches the characteristic bug of a data-driven UI: indexing a payload
+     * the warehouse did not populate reads `undefined`, renders as a blank
+     * cell, and is caught by neither a test nor an obvious screenshot. */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src"]
+}

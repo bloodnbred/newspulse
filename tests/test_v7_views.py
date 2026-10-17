@@ -673,6 +673,60 @@ def test_the_mood_chart_never_puts_two_units_on_one_axis() -> None:
     assert "v2_market_price" in payload, "the price series is missing"
 
 
+def test_the_lock_lives_beside_the_connection_and_every_reader_takes_it() -> None:
+    """Regression guard for the defect that outlived its own fix.
+
+    Commit 1e75d21 added a lock to `dwm/api/v2.py` and called the concurrency
+    bug closed. It was not. `_open_connection` is `@lru_cache`d, so v2, ui and
+    the v1 store all share ONE handle - and a lock only protects the readers who
+    take it. `store.py` did not, so `/health` went on interleaving and built
+    `SELECT count(*) FROM 2015-06-30`: a `publish_date` value from a concurrent
+    `/ui/home`, handed to `table_counts()` as a table name.
+
+    Two assertions, because either alone would pass while the bug is live:
+    the lock is in `store` (the module that owns the connection), and hammering
+    every reader at once produces no error.
+    """
+    import threading
+
+    from dwm.api import store, ui, v2
+
+    assert hasattr(store, "_LOCK"), "store.py owns the connection and the lock"
+    assert not hasattr(v2, "_LOCK"), (
+        "v2 still holds its own lock; a second lock cannot protect a shared "
+        "handle, and its existence hides that store.py is the one that matters"
+    )
+
+    errors: list[str] = []
+
+    def hammer(name: str, fn) -> None:
+        for _ in range(40):
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001 - the point is to catch any
+                errors.append(f"{name}: {type(exc).__name__}: {exc}")
+
+    jobs = [
+        ("store.table_counts", store.table_counts),
+        ("store.audit_funnel", lambda: store.audit_funnel(5)),
+        ("store.topics", store.topics),
+        ("v2._has", lambda: v2._has("fact_headline")),
+        ("ui._has", lambda: ui._has("cube_sector_month")),
+        ("v2._rows", lambda: v2._rows("SELECT 1 AS n")),
+    ]
+    threads = [threading.Thread(target=hammer, args=job) for job in jobs for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, (
+        f"{len(errors)} of {len(threads) * 40} concurrent reads failed. Every "
+        f"reader of the shared handle must go through store.reading(). "
+        f"First few: {errors[:3]}"
+    )
+
+
 def _mood_rows() -> list[dict]:
     """Three months of drill-across rows, enough to build a chart."""
     return [

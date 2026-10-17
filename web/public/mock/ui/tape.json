@@ -1,0 +1,36 @@
+{
+  "data": [
+    {
+      "label": "MOCK Energy",
+      "value": "+12.40%",
+      "change": 1.24
+    },
+    {
+      "label": "MOCK Metals",
+      "value": "+12.40%",
+      "change": 1.24
+    },
+    {
+      "label": "MOCK Pharma",
+      "value": "+12.40%",
+      "change": 1.24
+    },
+    {
+      "label": "MOCK IT",
+      "value": "+12.40%",
+      "change": 1.24
+    },
+    {
+      "label": "MOCK FMCG",
+      "value": "+12.40%",
+      "change": 1.24
+    }
+  ],
+  "meta": {
+    "concept": "MOCK",
+    "ms": 0.0,
+    "rows": 5,
+    "mock": true,
+    "note": "DEV-ONLY MOCK. Every sector label is prefixed MOCK so a screenshot taken with ?mock=1 cannot be mistaken for a result. Addendum rule 3: mock files live in web/public/mock/, are never shipped, and are deleted once the real endpoint is wired."
+  }
+}
