@@ -5,7 +5,7 @@
 # skips the installs and goes straight to starting the servers.
 #
 #   ./start.sh                 set up, run
-#   ./start.sh -s 50000        smaller warehouse, much faster (good for a first look)
+#   ./start.sh -s 50000        PREVIEW: earliest rows only, stock pages empty
 #   ./start.sh -r              discard the warehouse and rebuild it
 #   ./start.sh -n              do not open a browser
 
@@ -93,7 +93,10 @@ if [ -f "$WAREHOUSE" ]; then
 else
   warn "No warehouse yet. Building it now."
   warn "This downloads news and price data and can take 30-60 minutes."
-  warn "  For a fast first look, stop and run:  ./start.sh -s 50000"
+  warn "  For a quick preview instead, stop and run: ./start.sh -s 50000"
+  warn "  Note: a preview covers only the earliest rows of each file, so the"
+  warn "  stock, event and surprise-day pages will be empty. Run without it for"
+  warn "  the real thing."
   echo
   if [ "$SAMPLE" -gt 0 ]; then
     "$VENV_PY" -m dwm all --sample "$SAMPLE" || die "the data build failed. Scroll up for the error."

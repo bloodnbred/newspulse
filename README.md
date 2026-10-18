@@ -19,7 +19,13 @@ You need **Python 3.11+** and **Node.js 18+**. Then, from this folder:
 
 That's it. The script installs what's missing, builds the database the first time, starts everything and opens the dashboard at **http://localhost:5173**. Press `Ctrl+C` to stop it.
 
-The first build downloads about 30–60 minutes' worth of data. If you'd rather take a quick look first, use `.\start.ps1 -Sample 50000` (Windows) or `./start.sh -s 50000` (Mac/Linux) — it works the same way on a smaller slice.
+The first build downloads about 30–60 minutes' worth of data. That is the only way to get the whole thing, and I would recommend it — most pages need it.
+
+**If you just want a quick look**, add `-Sample 50000` (Windows) or `-s 50000` (Mac/Linux). It runs in a few minutes, and the homepage, the filter bar, Cube Studio and Headline Lab all work. But be aware what it is not:
+
+- It takes the **earliest** rows of each file, so you get roughly the first year of the five, not all five years. Anything that spans time — the Time Machine, the calendar, the surprise-day count — will look sparse.
+- Several mining results will be empty or will report "not enough data". Stock clustering, the event study and the surprise days all need the full history. The pages say so rather than showing a wrong number.
+- It is a preview. **Run it once without `-Sample` before you show anyone a number.**
 
 Already got the data? Then `./start.sh` skips straight to starting.
 

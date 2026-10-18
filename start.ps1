@@ -14,9 +14,11 @@
     Discard the existing warehouse and rebuild it from scratch.
 
 .PARAMETER Sample
-    Only process this many rows per dataset. Produces a smaller warehouse in a
-    few minutes instead of an hour, and every page still works - the numbers
-    are just from less data. Good for a first look.
+    A PREVIEW, not a smaller version of the same thing. It takes the earliest
+    rows of each file, so you get roughly the first year of the five rather
+    than all five, and stock clustering, the event study and the surprise
+    days come out empty because they need the full history. Good for seeing
+    whether you like it; do not quote a number from it.
 
 .PARAMETER NoBrowser
     Do not open a browser. Useful on a remote machine or over SSH.
@@ -145,7 +147,10 @@ if (Test-Path $warehouse) {
 } else {
     Warn "No warehouse yet. Building it now."
     Warn "This downloads news and price data and can take 30-60 minutes."
-    Warn "  For a fast first look, stop and run:  .\start.ps1 -Sample 50000"
+    Warn "For a quick preview instead, stop and run:  .\start.ps1 -Sample 50000"
+    Warn "A preview is NOT a smaller version of this. It takes the earliest rows of"
+    Warn "each file, so it covers about a year of the five, and the stock, event and"
+    Warn "surprise-day pages come out empty. Do not quote a number from a preview."
     Write-Host ""
     $args_ = @('-m', 'dwm', 'all')
     if ($Sample -gt 0) { $args_ += @('--sample', "$Sample") }
