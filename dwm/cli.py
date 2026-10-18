@@ -338,6 +338,62 @@ def report(
         raise typer.Exit(code=1)
 
 
+@app.command("all")
+def run_all(
+    db: DbOpt = None,
+    sample: SampleOpt = None,
+    years: YearsOpt = 5,
+    chunk: ChunkOpt = 100_000,
+    skip_fetch: Annotated[
+        bool, typer.Option("--skip-fetch", help="Use the raw files already on disk.")
+    ] = False,
+    skip_report: Annotated[
+        bool, typer.Option("--skip-report", help="Stop after the mining stage.")
+    ] = False,
+) -> None:
+    """Run the whole pipeline in order: ingest, etl, features, build, link, mine, report.
+
+    This is the command a new machine needs. `AGENTS.md` has always documented
+    `python -m dwm all`, and `start.ps1` calls it, but no such command existed -
+    so the documented way to build a warehouse from scratch failed with
+    "No such command 'all'", on a machine where the only thing you have is the
+    setup script.
+
+    Each stage calls the same function as its own subcommand rather than
+    shelling out, so `dwm all` and running the seven commands by hand produce
+    identical output. The order is the dependency order: dimensions before
+    facts, facts before cubes, cubes before mining, mining before the report.
+
+    A failure stops the run and names the stage. There is deliberately no
+    `--force` that carries on past a broken stage, because every later stage
+    would report a confidently wrong number.
+    """
+    stages: list[tuple[str, object]] = [
+        ("ingest", lambda: ingest(  # noqa: PLR1702
+            db=db, sample=sample, years=years, chunk=chunk,
+            dataset=None, force_download=False, skip_fetch=skip_fetch, verbose=False,
+        )),
+        ("etl", lambda: etl(db=db, sample=sample, years=years, chunk=chunk)),
+        ("features", lambda: features(db=db, sample=sample, years=years, chunk=chunk)),
+        ("build", lambda: build(db=db, sample=sample, years=years, chunk=chunk)),
+        ("link", lambda: link(db=db, sample=sample, years=years, chunk=chunk)),
+        ("mine", lambda: mine(db=db, sample=sample, years=years, operation="all")),
+    ]
+    if not skip_report:
+        stages.append(("report", lambda: report(db=db, years=years, out=None)))
+
+    for name, run in stages:
+        get("dwm").info("pipeline stage: %s", name)
+        try:
+            run()  # type: ignore[operator]
+        except SystemExit as exc:  # `report` raises Exit(1) on a failed gate
+            raise typer.Exit(code=exc.code) from exc
+        except Exception as exc:  # noqa: BLE001 - re-raised with the stage name
+            get("dwm").error("pipeline stage '%s' failed: %s", name, exc)
+            raise typer.Exit(code=1) from exc
+    get("dwm").info("pipeline complete: %s", " -> ".join(n for n, _ in stages))
+
+
 @app.command()
 def audit(
     db: DbOpt = None, run: Annotated[str | None, typer.Option("--run", help="Run id.")] = None
@@ -388,19 +444,19 @@ def serve(
         ),
     ] = False,
 ) -> None:
-    """Start the backend, which also serves the dashboard.
+    """Start the API server.
 
     Takes a copy of the warehouse to serve from. DuckDB locks its file
     exclusively even for a read-only connection, so serving the live file
     would block every CLI command for as long as the server ran. Serving a
-    byte-identical snapshot keeps the dashboard and the CLI usable at the same
-    time, which is what a demonstration needs.
+    byte-identical snapshot keeps the API and the CLI usable at the same time,
+    which is what a demonstration needs.
 
-    **This one process serves everything.** The dashboard is mounted as static
-    files on the same application and reads the same endpoints on the same
-    origin, so there is no second server to start and no CORS to configure. It
-    used to be a separate Streamlit process on :8501, which meant two
-    terminals to get wrong before a demonstration.
+    This serves the API only. The dashboard is the React app in `web/`, started
+    with `npm run dev`; `start.ps1` and `start.sh` start both. This process used
+    to mount the v1 vanilla-JS dashboard as static files on the same origin,
+    which meant one terminal instead of two - but it also meant two front ends
+    reading the same endpoints, and only one of them is maintained.
     """
     import uvicorn
 
