@@ -355,18 +355,21 @@ async function run() {
       }
 
       // ---- hover sweep ------------------------------------------------
-      // Every chart in this app draws its tooltip only on hover, and a tooltip
-      // formatter that throws is invisible to a screenshot, to the type checker
-      // (the cast asserts what it hopes for) and to a click sweep. The treemap
-      // one shipped broken for six phases because nothing ever pointed at the
-      // chart.
+      // Moves the pointer across the whole page, scrolling as it goes, so that
+      // anything which reacts to a mouseover is exercised rather than skipped.
       //
-      // The events go through CDP's `Input` domain rather than
-      // `dispatchEvent`, because synthetic DOM events are untrusted and ECharts
-      // listens on the canvas through zrender, which ignores them. An earlier
-      // version of this sweep used `dispatchEvent`, reported "no console
-      // errors", and was still catching a deliberately reintroduced bug - so
-      // the check has to fire real input or it is decoration.
+      // **What this does not cover: chart tooltips.** It has been tried against
+      // a deliberately reintroduced ECharts tooltip crash - the treemap
+      // formatter that throws on `p.data.sector` - and reported "no console
+      // errors" both times, including after switching from synthetic
+      // `dispatchEvent` to CDP's `Input.dispatchMouseEvent` and adding
+      // scrolling. ECharts draws into a canvas and does not appear to raise the
+      // tooltip through the path this sweep drives.
+      //
+      // It is kept because it is cheap and it does exercise DOM hover state,
+      // but it is not evidence about tooltips. `tsc` is what caught the missing
+      // null guard; do not read a clean run here as meaning the charts are
+      // safe to hover.
       const mark = noise.length;
       const [vw, vh] = await evaluate(
         `[window.innerWidth, window.innerHeight, document.body.scrollHeight]`,
