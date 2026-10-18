@@ -91,8 +91,9 @@ def ensure_snapshot(force: bool = False) -> Path:
     source = default_db_path()
     if not source.exists():
         raise DataUnavailable(
-            f"no warehouse at {source}. Run "
-            "`powershell -ExecutionPolicy Bypass -File .\\run_all.ps1` first."
+            f"no warehouse at {source}. Run `.\\start.ps1` (Windows) or "
+            "`./start.sh` (Mac/Linux) to build it, or "
+            "`python -m dwm all` if the environment is already set up."
         )
     target = snapshot_path()
     if target.exists() and not force and target.stat().st_mtime >= source.stat().st_mtime:

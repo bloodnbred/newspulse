@@ -623,11 +623,20 @@ def test_snapshot_is_not_rebuilt_when_it_is_current(settings, monkeypatch) -> No
 
 
 def test_snapshot_refuses_without_a_warehouse(tmp_path: Path, monkeypatch) -> None:
+    """A missing warehouse must be an instruction, not a traceback.
+
+    The message names the command that builds one. It used to name
+    `run_all.ps1`, which no longer exists, so the one time a reader actually
+    needed it the message pointed at nothing.
+    """
     from dwm.api.store import DataUnavailable, ensure_snapshot
 
     monkeypatch.setattr("dwm.api.store.default_db_path", lambda: tmp_path / "nope.duckdb")
-    with pytest.raises(DataUnavailable, match="run_all"):
+    with pytest.raises(DataUnavailable) as caught:
         ensure_snapshot(force=True)
+    message = str(caught.value)
+    assert "start.ps1" in message and "start.sh" in message
+    assert "python -m dwm all" in message
 
 
 

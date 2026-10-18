@@ -1965,7 +1965,7 @@ def _build_home(scope: Scope) -> JSONResponse:
             sector_day_args,
         )
 
-        # Aliased to the names `EventMark` declares in web-scaffold/src/types.ts.
+        # Aliased to the names `EventMark` declares in web/src/types.ts.
         # The dimension's own columns are `start_date` and `event_label`, and
         # returning those unchanged produced a payload where `date` was
         # undefined - which the calendar crashed on, blanking the entire page.

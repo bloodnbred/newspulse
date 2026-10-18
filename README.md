@@ -1,366 +1,160 @@
-# dwm-india-news
+# NewsPulse Nifty
 
-Data Warehousing and Mining project: **Indian News Warehouse**.
+**What this is.** A research project that puts Indian business news and the Indian stock market side by side, so you can ask *"on days when the market moved a lot, what was the news saying?"* — and get an answer you can check.
 
-Loads three real datasets into a DuckDB fact constellation, runs OLAP and
-mining operations, and produces a traceable report on trends in Indian news.
-The design is specified in [`BLUEPRINT.md`](BLUEPRINT.md); this file covers how
-to run it and what state each phase is in.
+It does three things: it **collects** the raw material, it **organises** it into a proper database that can answer questions fast, and it **puts a dashboard in front of it** so you can ask the questions yourself without writing any code.
 
-## What it found
+**Who it's for.** Anyone curious whether news and prices move together. It is a university project, not a trading tool.
 
-Three of the seven research questions produced **no result, or a result that
-reads better than it is**. Those are reported with the measurement that
-establishes them, which is the most useful thing here.
+---
 
-- **The headline volume carries no news signal.** Within-year variation is
-  2–4%, and a prediction fixed before the data was examined — that Health,
-  Sports and Entertainment coverage would rise during the listed events —
-  **failed in 5 of 10 event months**, all three desks falling together.
-- **Topic structure exists but covers a sliver.** Silhouette 0.2582, with one
-  cluster holding 94.88% of the corpus. What the small clusters find is
-  `rs crore`, `road accident`, `year old`: writing patterns, not desks.
-- **Headline volume does not relate to daily returns** (strongest 0.0748, and
-  the one significant lag out of 15 is what chance produces) **but does relate
-  to 20-day volatility**, at r = −0.2827.
-- `Education` carries a 10.94% risk-signal rate against a 3.77% corpus rate;
-  644 association rules are found identically by Apriori and FP-Growth; and the
-  IFND classifier reaches 95.71% against a 65.9% majority baseline.
+## Run it
 
-Full detail in [`docs/04-mining.md`](docs/04-mining.md) and the generated
-[`reports/report.md`](reports/report.md).
+You need **Python 3.11+** and **Node.js 18+**. Then, from this folder:
 
-## Current state
-
-Phases 0-8 are **built and verified on the real data**. Phase 9 is presentation
-work: the report is already generated, so what remains is a viva sheet,
-diagrams and a final reconciliation against the blueprint.
-
-| Phase | Output | Status |
-|---|---|---|
-| 0 Scaffold | repo, config, CLI | done |
-| 1 Ingest | `stg_toi`, `stg_ifnd`, `stg_nifty`, `etl_audit` | done, gate passes on real data |
-| 2 ETL + dims | `cln_*`, `dim_*`, `map_category_topic` | done, gate passes on real data |
-| 3 Features + facts | `fact_*`, `dim_keyword`, bridge, cubes | done, gate passes on real data |
-| 4 OLAP | `dwm/olap/`, SQL cookbook | done, verified against the warehouse |
-| 5-6 Mining | trends, bursts, clusters, rules, classifier | done, all 7 questions answered |
-| 7 Inference | `facts.json`, `report.md` | done, 15 of 15 guards pass |
-| 8 API + dashboard | FastAPI, static front end | done, 16 endpoints, 5 sections |
-| 9 Polish | viva sheet, diagrams | **next** |
-
-## Setup
-
-Python 3.11+ (developed on 3.12.10).
-
-```powershell
-winget install --id Python.Python.3.12 --scope user
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-The venv is at `.venv\`. On this machine `python` on `PATH` is only the
-Microsoft Store alias, so invoke the interpreter by full path.
-
-## Running
-
-```powershell
-# what is configured: URLs, column aliases, provenance
-.\.venv\Scripts\python.exe -m dwm config --verbose
-
-# download the raw CSVs and load the staging tables
-.\.venv\Scripts\python.exe -m dwm ingest
-
-# build the conformed dimensions and the clean tables
-.\.venv\Scripts\python.exe -m dwm etl
-
-# score sentiment, sensationalism, counts and keywords
-.\.venv\Scripts\python.exe -m dwm features
-
-# build the fact tables and the cubes
-.\.venv\Scripts\python.exe -m dwm build
-
-# answer the seven research questions, writing reports/mining.json
-.\.venv\Scripts\python.exe -m dwm mine
-
-# render reports/facts.json and reports/report.md, and run the guard rails
-.\.venv\Scripts\python.exe -m dwm report
-
-# OLAP: list the operations, or run one
-.\.venv\Scripts\python.exe -m dwm olap
-.\.venv\Scripts\python.exe -m dwm olap --op topic_mix
-.\.venv\Scripts\python.exe -m dwm olap --op slice -p topic=Business
-.\.venv\Scripts\python.exe -m dwm olap --op drill_across -p topic=Business --limit 20
-
-# everything from raw CSV to report.md, with timings (about six minutes)
-powershell -ExecutionPolicy Bypass -File .\run_all.ps1 -clean
-
-# just the warehouse, skipping mining and the report (about four minutes)
-powershell -ExecutionPolicy Bypass -File .\run_all.ps1 -clean -skipAnalysis
-
-# develop on a slice instead of the full file
-.\.venv\Scripts\python.exe -m dwm ingest --sample 50000
-
-# what is in the warehouse, and where the rows went
-.\.venv\Scripts\python.exe -m dwm tables
-.\.venv\Scripts\python.exe -m dwm audit
-```
-
-### Serving it
-
-Two terminals:
-
-```powershell
-# the API: http://127.0.0.1:8000/docs
-.\.venv\Scripts\python.exe -m dwm serve
-
-# that is it. the dashboard is at http://localhost:8000/
-```
-
-The dashboard needs the API running. Point it elsewhere with
-`$env:DWM_API = "http://127.0.0.1:9000"`.
-
-**You can run CLI commands while both are up.** DuckDB locks its file
-exclusively even for a read-only connection, so `dwm serve` copies the
-warehouse to `warehouse/dwm.serve.duckdb` and serves that copy. The copy is
-byte-exact and takes 0.2 seconds. Refresh it with `dwm serve --resnapshot` or
-`POST /query/reload`.
-
-The dashboard has five sections: **Overview** leads with the study's
-conclusions, **Findings** is one page per research question with the answer
-stated before the evidence, **Explore** is the browse/warehouse/OLAP panel,
-**How it works** shows the guard rails, the design decisions and the four
-corrections this study made, and **Report** is the full document.
-
-### Demonstrating it
-
-[`docs/DEMO.md`](docs/DEMO.md) is an ordered runbook: what to show, what to
-say, how long each part takes, and what to do when something breaks. Start
-there.
-
-Global options accepted by the pipeline commands: `--db`, `--sample`, `--years`,
-`--chunk`, `--dataset/-d`, `--force`, `--skip-fetch`, `--verbose`.
-
-A first full run downloads about 240 MB into `data/raw/` (gitignored) and
-takes roughly a minute. A `.sha256` sidecar is written next to each file, so
-subsequent runs skip the download.
-
-## Tests
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\ruff.exe check .
-```
-
-386 tests, no network access required. They cover config loading, date parsing
-with its precision rules, staging against the row-count gate, the CSV
-normalisation fallback, the CLI contract, the ETL stage's dedupe grain and
-window derivation, the feature stage's measure definitions, the Phase 3
-fact/cube gate, every OLAP operation, the mining stage's guard rails, the
-inference stage's traceability, and every API endpoint.
-
-The later tests check the **promises** rather than the numbers, because the
-numbers are already recorded in `reports/mining.json`. Specifically:
-
-- a rate is never reported without its denominator
-- a statistic from too few observations is refused with a stated reason
-- the payload carries no causal wording and no "fake news rate"
-- the classifier is judged against the real majority baseline, not 50%
-- two mining runs agree on every number
-- the sampler returns exactly the rows asked for and is not a first-n sample
-- mlxtend's rule columns are read by name, not position
-- every fact has a source, and every caution reaches `report.md`
-- the guard rails fire on an empty warehouse
-- the API is read-only and refuses unknown operations
-
-Tests never touch the real warehouse, `data/raw` or `reports/`. An autouse
-fixture redirects `DWM_REPORTS_DIR`, because the suite once silently replaced
-the real `mining.json` with results from a ten-row fixture.
-
-## Timings, measured on the full corpus
-
-| stage | time |
+| Your computer | Type this |
 |---|---|
-| `ingest` (files already downloaded) | 13s |
-| `etl` | 13s |
-| `features` (3.15M headlines through VADER) | 203s cold, ~2s if already scored |
-| `build` (facts + cubes) | 6s |
-| `mine` (all seven research questions) | 91s, of which clustering is 77s |
-| `report` (facts.json + report.md, 15 guards) | 1s |
-| **full clean run to report.md** | **about 5.5 minutes** |
+| Windows | `.\start.ps1` |
+| Mac / Linux | `./start.sh` |
 
-`features` is resumable and fingerprinted. An interrupted run continues from
-the last scored row instead of restarting, and a change to any measure
-definition discards the cache automatically rather than leaving stale numbers
-in the warehouse.
+That's it. The script installs what's missing, builds the database the first time, starts everything and opens the dashboard at **http://localhost:5173**. Press `Ctrl+C` to stop it.
 
-## Layout
+The first build downloads about 30–60 minutes' worth of data. If you'd rather take a quick look first, use `.\start.ps1 -Sample 50000` (Windows) or `./start.sh -s 50000` (Mac/Linux) — it works the same way on a smaller slice.
+
+Already got the data? Then `./start.sh` skips straight to starting.
+
+---
+
+## The honest warning, up front
+
+**This is not investment advice, and nothing here predicts anything.**
+
+What the project can tell you is *"these two things happen at the same time."* It cannot tell you *"this news caused that move,"* because proving that would need data this project does not have.
+
+Where a number is weaker than it looks, the page says so next to the number. This is deliberate and it is the most important thing to know about the project: a tool that only shows its successes is worse than useless.
+
+---
+
+## What you can do with it
+
+### The home page — your starting point
+
+The big picture. Six numbers at the top, then the interesting parts.
+
+- **The six numbers.** How many headlines were read, how many companies are tracked, how many trading days, what the Nifty did, what share of headlines were flagged as "risky writing", and how many surprising days were found. Every one comes from a database query, never a typed-in constant.
+- **Market mood.** The gauge on the right. It answers *"how busy has the news been lately, compared with its own history?"* — a percentile, not a score. Out of the whole corpus it currently reads **27th percentile, "Calm"**: quieter than 73% of the days in the window. Note the caption: it always says what it's being compared against, because "busy" only means something relative to something.
+- **Time Machine.** The chart in the middle. Drag the slider to travel through the five years. Red marks are days the market moved unusually far. Click any day to see what was written that day.
+- **The calendar.** Every day of the corpus as a coloured square. Dark means busy. Trading days and market holidays are marked differently — a great many headlines land on days the market was shut.
+- **The sector square-map.** Each rectangle is an industry. Bigger = more news about it. Green or red = whether the stocks in it went up or down that month. **Click any sector to filter the whole page to it.**
+- **Surprise days.** Days where the price moved far but the news was quiet. Click one to see it.
+
+### The filter bar — at the top of the home page
+
+Four controls: a date range, sector chips, and a checkbox for "market-report headlines".
+
+Pick a date range and everything on the page narrows to it. Pick sectors and the sector figures narrow.
+
+**One thing to know:** picking a sector does *not* narrow the headline count. That's not a bug — it's how the data is built. A headline only "belongs to" a sector if it happens to name a company in that sector, so most headlines belong to no sector at all. When you have a filter on, an amber strip appears under the bar telling you exactly what moved and what didn't. Read it; it's the honest bit.
+
+### Search anything — press `Ctrl + K`
+
+Type a company, a sector, or a page name and jump straight there. Type "TCS" and you get the company's page.
+
+### Cube Studio — ask your own questions
+
+The most powerful page, and the one that rewards curiosity.
+
+Pick a **cube** (a pre-calculated table). Pick **measures** (headline count, average sentiment, average return, and so on). Put measures on **rows** and **columns**. Pick **filters**. Drag dimensions around.
+
+The chart redraws as you go. Underneath, the drawer shows **the actual SQL query** that produced what you're looking at, and you can copy it. You never have to trust the chart — you can read the question it asked.
+
+It will also refuse things. Try adding *Sector* while the *News* cube is selected: it says no, and explains why with the actual number of rows that would result. A tool that silently gives you a wrong answer is worse than one that says no.
+
+### Stock 360 — one company at a time
+
+Every tracked company has a page: its price history, what the news said about it on each day, its risk-signal rate, how often it's mentioned.
+
+Three companies show honest gaps rather than blank space: some listed after our data ends, some have no price history in the window. The page says which and why.
+
+### Event Lab — big market events
+
+Defined events (budgets, elections, pandemic phases) with how the sectors and companies reacted around them.
+
+The honest bit: it reports **"coincided with"**, never "caused". One event before the COVID crash is one observation. A test measures whether the pattern holds; if it doesn't, the page says so.
+
+### Mining Lab — what the machine found
+
+Four tabs of automated findings.
+
+- **Clusters** — groups of companies that move together. Scroll to the bottom for the part that matters: one cluster holds **94.9%** of the companies. A clustering that puts 95% of things in one pile hasn't found much, and the page tells you that rather than showing you a pretty treemap.
+- **Rules** — patterns like *"when these words appear together, that tends to follow."* Sliders let you demand stronger rules. Set the bar high and it honestly says fewer rules survive.
+- **Models** — two models trained to predict things, shown together deliberately:
+  - **Labelled-statement classifier: 95.7% accurate, against a 65.9% baseline.** It works.
+  - **Direction model: 49.9% accurate, against a 50.5% baseline. p = 0.85 — no better than a coin flip.**
+
+  The second one is on the same page as the first, on purpose. Hiding it would make the tool look better and be less trustworthy. A model that can't beat guessing has no skill, and that's a legitimate finding, not a failure.
+- **Network** — which companies get mentioned in the same headlines. Sixty pairs, twenty-two above the threshold. Thin, and labelled as thin.
+
+### Headline Lab — test a single headline
+
+Paste any headline. The tool measures its writing style: how many exclamation marks, capital letters, superlatives, urgency words, and a **risk-signal rate**.
+
+**Important:** it measures *style*, not truth. A sensational-sounding headline can be completely true, and a calm one can be false. Click one of the corpus's own headlines to see what the tool says about it.
+
+### Data & Schema — what's actually in here
+
+A map of the whole database. Every table, what each one holds, and how many rows. Click any table for its columns.
+
+There's also an **ETL funnel** showing what was rejected and why — usually more interesting than what was accepted, because that's where "why is this number different from what I expected?" usually gets answered.
+
+### Insights — the summary
+
+Every finding the mining stage produced, on one page, each with its evidence and its caveat. Download any card as a PNG.
+
+---
+
+## Things this project genuinely cannot do
+
+Listed because a tool that hides its limits is harder to use than one that names them.
+
+| | Why |
+|---|---|
+| **It can't tell you what will happen tomorrow.** | The direction model is at chance level. The numbers on screen are the evidence for that. |
+| **It can't tell you news *caused* a move.** | Only that they happened together. |
+| **It can't tell you a headline is fake.** | It measures writing style. Style and truth are different things. |
+| **Company mentions are unreliable.** | Matching " Infosys " in a headline is guesswork, and nobody has yet checked how often it's wrong. The project ships a sample for a human to check; until that's filled in, treat every company-specific number as approximate. |
+| **Companies that left the Nifty are missing.** | We only have today's list of members, applied to a five-year-old window. Companies that were in it and are not now simply aren't there. |
+| **It stops in June 2020.** | That's where the news data ends. The stock data continues past it, and the charts deliberately stop too, rather than comparing two different periods. |
+
+---
+
+## How it's put together, in one paragraph
+
+The data arrives as several separate files — news headlines, labelled statements, index prices, per-company prices. They're cleaned, given a proper calendar, sorted into categories, and stored in a fast database in an arrangement where questions like "total headlines per month per topic" are already pre-calculated. Machine-learning models are then run over that to find clusters, patterns and models. A small web service reads the results, and the dashboard asks it for exactly what each screen needs. **Every number you see came from a query or a fitted model. None was typed in by hand.**
+
+---
+
+## Project layout
 
 ```
-config/
-  datasets.yaml      source URLs, column aliases, date formats, provenance
-  topics.yaml        raw category -> coarse topic, with ordered regex rules
-  features.yaml      sensationalism weights, thresholds, vocabulary size
-  mining.yaml        every mining threshold, seed and sample size
-dwm/
-  cli.py             Typer app, one command per pipeline stage
-  config.py          paths, run options, dataset specs, topic map
-  db.py              DuckDB connection, table helpers
-  parse.py           date/label/category parsing with explicit precision
-  logging_utils.py   console logging, timed steps
-  ingest/
-    fetch.py         download with resume, retry and checksum sidecars
-    normalise.py     strict RFC 4180 re-quoting fallback
-    staging.py       stg_* loaders and the row-count gate
-    audit.py         etl_audit funnel
-    runner.py        per-dataset orchestration
-  etl/
-    dates.py         SQL date expressions + the IFND Python UDF
-    clean.py         cln_* builders: dedupe, window, topic attachment
-    dims.py          the five conformed dimensions
-    __init__.py      orchestration and the Phase 2 gate
-  features/
-    lexicons.py      stopword, superlative and urgency lists (offline, pinned)
-    scoring.py       one pass: sentiment, sensationalism, counts, keywords
-    runner.py        chunked runner, optional process pool, SQL market features
-  warehouse/
-    facts.py         the three fact tables
-    cubes.py         pre-aggregated cubes, sums only
-  olap/
-    operations.py    slice, dice, roll_up, drill_down, pivot, cube, drill_across
-  mining/
-    sampling.py          one deterministic sampler, seeded and exact
-    trends.py            RQ1 topic mix, RQ2 bursts, partial-year guard
-    sensationalism.py    RQ3 risk-signal rate by topic, Wilson intervals
-    clustering.py        RQ4 TF-IDF + LSA + K-Means, k by silhouette
-    rules.py             RQ5 Apriori and FP-Growth, timing compared
-    market.py            RQ6 lagged correlation and volatility, trading days only
-    classifier.py        RQ7 Real vs Fake against the majority baseline
-  inference/
-    facts.py         mining.json + warehouse -> facts.json, with cautions
-    report.py        facts.json -> report.md, templates only, no LLM
-    __init__.py      orchestration and the 15-check gate
-  api/
-    store.py         read-only warehouse handle, cached results
-    app.py           13 FastAPI endpoints
-dashboard/
-  static/
-    index.html       the shell; sets the theme before first paint
-    app.css          design tokens, both themes, contrast-checked
-    app.js           routing, page rendering, chart embedding
-  helpers.py         find_uncautoned and formatting, testable without a browser
-dwm/ui/
-  charts.py          Vega-Lite specs built in Python, themed, one palette
-dwm/inference/
-  plain.py           the plain-language layer: intro, 30-second summary, glossary
-  helpers.py         design system + formatting, so "no figure without a caveat"
-                     is testable without a browser
-tests/
-docs/
-  01-ingest-etl.md         ingest design, data traps, measured data profile
-  02-warehouse-schema.md   dimensions, clean tables, gate results
-  03-features-facts.md     measure definitions, cubes, Phase 3 gate
-  04-mining.md             the seven questions and the three negative results
-  05-inference-api.md      traceability, guard rails, API and dashboard
-  VIVA.md                  every claim, its command, and the follow-up question
-  DEMO.md                  ordered runbook, with timings and fallbacks
-  STATUS.md                handover notes and current state
-reports/              mining.json, facts.json, report.md
-data/raw/             raw CSVs, gitignored
-warehouse/            dwm.duckdb, gitignored
+dwm/         the data work: collecting, cleaning, analysing, and the web service
+web/         the dashboard you actually look at
+sql/         the database structure
+config/      settings for what to collect and how to categorise
+tests/       the automated checks
+reports/     generated summaries
+start.ps1    Windows: set up and run
+start.sh     Mac/Linux: set up and run
 ```
 
-## Design notes worth knowing before Phase 4
+## If you want to work on it
 
-These are measured findings, not assumptions. Full detail in
-[`docs/01-ingest-etl.md`](docs/01-ingest-etl.md),
-[`docs/02-warehouse-schema.md`](docs/02-warehouse-schema.md) and
-[`docs/03-features-facts.md`](docs/03-features-facts.md).
+```bash
+python -m pytest            # run the checks
+cd web && npm run build     # check the dashboard compiles
+node scripts/uicheck.mjs    # open every page in a real browser and check nothing breaks
+```
 
-- **Never pass `ignore_errors` to `read_csv`.** On duckdb 1.5.6 it silently
-  discarded 15,730 of 56,714 rows from a perfectly well-formed file, while
-  `count(*)` still reported the full number. The gate reconciles the
-  *materialised* count against the file. `store_rejects` is also unusable: it
-  drops the same rows and creates a fixed-name `reject_scans` table, so
-  staging a second dataset in the same connection fails outright.
-- **IFND cannot be parsed by DuckDB as shipped.** The loader falls back to a
-  strict `csv`-module re-quoting, then reloads. TOI and nifty load directly.
-- **Harvard Dataverse returns 403 to a non-browser User-Agent.** `fetch.py`
-  sends a browser UA; override with `DWM_USER_AGENT`.
-- **IFND dates are month-precision or worse.** After dedup 33,964 resolve to a
-  month, 6,789 to a day with no year, 10,357 have no date at all.
-  `fact_statement.date_key` must be nullable with a `date_precision`, and a
-  yearless day must never be given one.
-- **IFND's majority-class baseline is 66.7%**, not 50%.
-- **111,146 (date, text) headline pairs are filed under more than one
-  category.** `fact_headline` is therefore one row per (date, text) with a
-  most-frequent primary topic. One row per category would multi-count a third
-  of a million headlines in every topic analysis.
-- **`Local` is 58% of TOI overall and 70% inside the window.** It is a
-  location, not a subject, which is why `dim_topic` carries a `topic_group`
-  separating `Place` from `Subject`. Research question 1 needs that split. Its
-  share of a single year reaches 89% in 2020, so "share of the window" and
-  "share of a year" are stored as separate facts and must not be interchanged.
-- **Headlines exist on 1,828 days in the window; the market trades on 1,235.**
-  The 593-day gap is weekends and holidays, so any market-linked join must go
-  through `is_trading_day`, not the calendar. `cube_day_topic` exists for this.
-- **Never hard-code a dimension key in fact DDL.** `dim_dataset` numbers its
-  rows by sorted code, so `toi` is key 3, not 1. A literal silently pointed
-  every headline at the wrong source while all row counts stayed correct. The
-  DDL now looks keys up, and tests cover it.
-- **Cubes store sums, never averages.** A test rejects any column named like a
-  mean. Rates are always `count / headline_count` computed at query time.
-- **`volatility_20d` is NULL until 20 sessions exist.** A 20-day volatility
-  from three observations would poison the Phase 6 correlation.
-- **`is_risk_signal` equals `is_sensational` for TOI** because unlabelled
-  headlines support style signals only. Report it as a risk-signal *rate*.
-- **TOI changed how it files content.** `business.international-business` is
-  11.1% of all 2017 headlines and 0.2% of 2018. Any topic-mix analysis that
-  ignores this reports a filing artefact as a change in reader interest.
-- **Monthly headline volume is nearly flat** (within-year CV 0.02–0.04), so
-  volume cannot answer RQ2 and no threshold will make it. See
-  [`docs/04-mining.md`](docs/04-mining.md).
-- **The 300-term keyword vocabulary cannot support association rules.** It
-  yields 1.99 items per headline because its top terms are functional words,
-  and mining it produces zero rules. RQ5 mines attributes instead.
-- **DuckDB's seeded sampler returns the wrong row count.** `USING SAMPLE
-  reservoir(2000 ROWS) REPEATABLE (seed)` returned 709. `dwm/mining/sampling.py`
-  sorts on `hash(column, seed)` instead, and a test asserts the sample is not a
-  first-n draw.
-- **Read mlxtend's rule columns by name.** They are ordered
-  `antecedents, consequents, antecedent support, consequent support, support,
-  confidence, lift`; reading positionally is off by two and made all 1,797
-  rules look like lift-1.000 tautologies.
-- **`silhouette_score` subsamples with no seed by default**, so the score moved
-  between identical runs. Pass `random_state`.
-- **A cluster description is a feature-engineering artefact, not a property of
-  the data.** Admitting numerals and stop words moved the silhouette from 0.258
-  to 0.068 and made "these headlines have no structure" look like a finding.
-  See the correction in [`docs/04-mining.md`](docs/04-mining.md).
+---
 
-## Honesty rules carried from the blueprint
-
-These are enforced in code, not just written down. Each has at least one test
-that fails if it is broken.
-
-- **Never call an unlabelled measure a "fake news rate".** On TOI it is a
-  **risk-signal rate**; only the labelled IFND data supports accuracy claims.
-  The API carries each fact's `caution` next to its value, and the dashboard
-  refuses to render a figure that has a unit and no caution.
-- **Cube totals are stored as sums, never averages.** Averages are recomputed
-  as sum/count at query time. A test rejects any column named like a mean.
-- **Correlations are associations, not causation.** Every coefficient travels
-  with a p-value, a count, and the number of tests run — 15 lag tests produce
-  about 0.75 false positives, so one p below 0.05 is not a discovery.
-- **A rate is never reported without its denominator**, and topics below a row
-  floor are excluded from rankings and listed separately.
-- **A statistic from too few observations is refused with a reason**, never
-  divided through to a plausible-looking number.
-- **A partial year never contaminates a whole-year statistic.** 2015 has seven
-  months; its wider spread once made a flat series look like CV 0.39.
-- **Every fact records its source, and every caution reaches the report.** This
-  is what makes "each number traces to a query" checkable rather than
-  aspirational.
-- **There is no language model in the reporting path.** `report.md` is rendered
-  from `facts.json` by templates.
-- **If a dataset cannot be fetched, the run stops and the gap is stated.**
-  **Data is never fabricated.**
+*Educational project. Not investment advice. Patterns shown are associations, not causes. Headline signals measure writing style, not truth.*

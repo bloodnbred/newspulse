@@ -25,13 +25,11 @@ command to run.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from fastapi.staticfiles import StaticFiles
 
 from dwm.api import store
 from dwm.api.store import DataUnavailable
@@ -347,36 +345,6 @@ def run_olap_operation(
 # ---------------------------------------------------------------------------
 
 
-@app.get("/ui/charts", tags=["ui"])
-def ui_charts(theme: str = Query(default="light", pattern="^(light|dark)$")) -> dict[str, Any]:
-    """Every chart on the dashboard, as Vega-Lite specs, in one theme.
-
-    **The specs are built here, in Python, and not in the browser.** That is not
-    about the "computes nothing" rule — drawing a chart is not computing a
-    finding. It is because a malformed spec is a blank page with no stack trace,
-    and building it here means a unit test can catch it. It is also how six
-    charts end up sharing one palette instead of drifting apart.
-
-    The theme is a parameter rather than a constant because a hard-coded light
-    palette is what made the previous dashboard unreadable on a machine set to
-    dark: CSS forced a light canvas while the chart library rendered dark charts
-    over it. Both are designed; the client asks for the one it is using.
-    """
-    from dwm.ui.charts import build_charts
-
-    def run() -> dict[str, Any]:
-        facts = store.load_facts()
-        charts = build_charts(
-            facts,
-            market_points=store.market_daily()["points"],
-            tables=store.table_counts(),
-            theme_name=theme,
-        )
-        return {"theme": theme, "charts": charts, "count": len(charts)}
-
-    return _guard(run)
-
-
 @app.get("/ui/manifest", tags=["ui"])
 def ui_manifest() -> dict[str, Any]:
     """Everything the front end needs to render its shell.
@@ -387,28 +355,23 @@ def ui_manifest() -> dict[str, Any]:
     return _guard(store.build_manifest)
 
 
-# v2 routes, mounted BEFORE the static catch-all so an API path can never be
-# swallowed by the file mount. v1 routes above are untouched.
+# v2 routes. v1 routes above are untouched.
 from dwm.api.v2 import router as v2_router  # noqa: E402
 
 app.include_router(v2_router)
 
 # The /ui backend-for-frontend router, for the React front end in web/.
-# Mounted before the static mount too: `/ui/charts` and `/ui/manifest` are v1
-# routes, and `/ui/home` is the new one, and none of them may be shadowed by
-# the file mount that follows.
 from dwm.api.ui import router as ui_router  # noqa: E402
 
 app.include_router(ui_router)
 
 
-# The static front end, mounted last so every API route above wins the match.
-# This is what makes the dashboard a single process: `dwm serve` serves the
-# data and the page that reads it, on one origin, with no CORS and no second
-# server to start before a demonstration.
-_STATIC_DIR = Path(__file__).resolve().parents[2] / "dashboard" / "static"
-
-if _STATIC_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="dashboard")
-else:  # pragma: no cover - only when the front end has not been built
-    log.warning("dashboard static directory missing at %s", _STATIC_DIR)
+# No static mount. This used to serve the v1 vanilla-JS dashboard out of
+# `dashboard/static`, with `dwm/ui/charts.py` building the Vega-Lite specs it
+# drew. That front end is gone: `web/` is the product, it is a single-page app
+# with its own dev server, and mounting a second one here meant two front ends
+# reading the same endpoints - two unreviewed paths to the same number, which
+# is the exact risk this module's docstring is about.
+#
+# `python -m dwm serve` is therefore the API only. The dashboard is `npm run dev`
+# in `web/`, or a built bundle served by any static host.

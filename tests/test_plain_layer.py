@@ -217,22 +217,27 @@ def test_an_unrecognised_cluster_says_so_rather_than_guessing() -> None:
 
 
 def test_the_inline_markup_renderer_handles_what_the_copy_uses(layer: dict) -> None:
-    """The front end's `md()` must cover every marker the prose actually uses.
+    """The prose must render as prose, in whichever front end reads it.
 
-    It originally knew only about backticks, so when the plain layer started
-    marking words with `*asterisks*` they rendered literally — "Against how
-    *unsettled* the market is" appeared on the page with the asterisks showing.
+    The plain layer marks a few words for emphasis with `*asterisks*`. It
+    originally did not, and when it started, the front end's renderer knew only
+    about backticks, so "Against how *unsettled* the market is" appeared on the
+    page with the asterisks showing.
 
-    The renderer is JavaScript and there is no browser here, so the check is that
-    every marker present in the prose is one the renderer claims to handle, and
-    that the JavaScript does in fact handle it. Both halves matter: a marker used
-    but unhandled renders as noise, and a handler nobody uses is untested code.
+    This used to assert against the v1 SPA's JavaScript, which is gone. It now
+    asserts two things that still hold: the React renderer strips the markers
+    before rendering, and the prose contains nothing else the renderer would not
+    handle. The first half is the bug that actually happened, so it is the half
+    worth keeping a test on.
     """
-    js = (ROOT / "dashboard" / "static" / "app.js").read_text(encoding="utf-8")
-
-    # The renderer handles these three, and says so in its own source.
-    for marker in ("<code>", "<strong>", "<em>"):
-        assert marker in js, f"the inline renderer does not handle {marker}"
+    hero = (ROOT / "web" / "src" / "components" / "HeroSearch.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "replace(/\\*\\*/g" in hero, (
+        "HeroSearch renders `brief.paragraphs` without stripping the "
+        "** emphasis markers the plain layer emits, so they will show as "
+        "literal asterisks on the page"
+    )
 
     text = "\n".join(
         [

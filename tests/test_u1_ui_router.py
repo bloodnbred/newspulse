@@ -193,7 +193,7 @@ def test_a_cache_hit_keeps_the_original_timing(client) -> None:
 
 
 def test_home_carries_the_fields_the_homepage_binds_to(client) -> None:
-    """Named against `web-scaffold/src/types.ts` -> `HomeSummary`.
+    """Named against `web/src/types.ts` -> `HomeSummary`.
 
     A renamed field is not a type error at runtime: the card renders `undefined`
     and the page looks finished. Asserting the keys is what catches it.
@@ -329,7 +329,7 @@ def test_the_vite_origin_is_allowed_for_a_preflight(client) -> None:
 
 
 def test_the_concept_union_accepts_what_the_server_sends() -> None:
-    """`web-scaffold/src/types.ts` closed its `Concept` union on ten values.
+    """`web/src/types.ts` closed its `Concept` union on ten values.
 
     `dwm/inference.insights` emits richer labels for all six of its cards, none
     of which were in the list - a type error at the boundary under `tsc`, and
@@ -349,7 +349,7 @@ def test_the_concept_union_accepts_what_the_server_sends() -> None:
 
     types = (
         Path(__file__).resolve().parent.parent
-        / "web-scaffold" / "src" / "types.ts"
+        / "web" / "src" / "types.ts"
     ).read_text(encoding="utf-8")
     assert "(string & {})" in types, (
         "the Concept union is still closed; the server's own labels will not "
@@ -370,7 +370,7 @@ def test_the_sector_palette_avoids_the_semantic_hues() -> None:
 
     source = (
         Path(__file__).resolve().parent.parent
-        / "web-scaffold" / "src" / "lib" / "echartsTheme.ts"
+        / "web" / "src" / "lib" / "echartsTheme.ts"
     ).read_text(encoding="utf-8")
     block = re.search(r"SECTOR_COLORS\s*=\s*\[(.*?)\]", source, re.S)
     assert block, "SECTOR_COLORS not found; the palette moved and this check is stale"
@@ -378,7 +378,7 @@ def test_the_sector_palette_avoids_the_semantic_hues() -> None:
 
     tokens = (
         Path(__file__).resolve().parent.parent
-        / "web-scaffold" / "src" / "styles" / "tokens.css"
+        / "web" / "src" / "styles" / "tokens.css"
     ).read_text(encoding="utf-8")
     semantic = {
         name: value.upper()

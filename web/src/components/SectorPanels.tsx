@@ -37,12 +37,23 @@ export function SectorTreemap({
         borderColor: 'rgba(148,163,184,.25)',
         textStyle: { color: '#E6EDF7', fontSize: 12 },
         formatter: (p: Record<string, unknown>) => {
-          const d = p.data as { name: string; value: [number, number]; sector: SectorHeat }
-          const s = d.sector
+          /* ECharts fires this for its own internal treemap nodes as well as
+           * for the sectors, and those carry no `data`. Reading `p.data.sector`
+           * without checking threw on hover and took the tooltip down with it -
+           * invisible to a screenshot, invisible to the type checker (the cast
+           * asserts what it hopes for), and only reproducible by actually
+           * pointing at the chart. */
+          const d = p.data as
+            | { name?: string; value?: unknown[]; sector?: SectorHeat }
+            | undefined;
+          if (!d) return '';
+          const s = d.sector;
+          const news = Number(Array.isArray(d.value) ? d.value[0] : 0);
+          const ret = s?.avg_return_pct ?? 0;
           return [
-            `<strong>${s.sector}</strong>`,
-            `${Number(d.value[0]).toLocaleString('en-IN')} headline-days`,
-            `mean return ${(s.avg_return_pct ?? 0) >= 0 ? '+' : ''}${(s.avg_return_pct ?? 0).toFixed(2)}%`,
+            `<strong>${s?.sector ?? d.name ?? ''}</strong>`,
+            `${news.toLocaleString('en-IN')} headline-days`,
+            `mean return ${ret >= 0 ? '+' : ''}${ret.toFixed(2)}%`,
             '',
             '<span style="opacity:.7">Click to filter the page by this sector</span>',
           ].join('<br/>')

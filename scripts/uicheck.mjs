@@ -354,6 +354,46 @@ async function run() {
         for (const n of noise.slice(mark)) record(route, c.d, `${n.kind}: ${n.text}`);
       }
 
+      // ---- hover sweep ------------------------------------------------
+      // Every chart in this app draws its tooltip only on hover, and a tooltip
+      // formatter that throws is invisible to a screenshot, to the type checker
+      // (the cast asserts what it hopes for) and to a click sweep. The treemap
+      // one shipped broken for six phases because nothing ever pointed at the
+      // chart.
+      //
+      // The events go through CDP's `Input` domain rather than
+      // `dispatchEvent`, because synthetic DOM events are untrusted and ECharts
+      // listens on the canvas through zrender, which ignores them. An earlier
+      // version of this sweep used `dispatchEvent`, reported "no console
+      // errors", and was still catching a deliberately reintroduced bug - so
+      // the check has to fire real input or it is decoration.
+      const mark = noise.length;
+      const [vw, vh] = await evaluate(
+        `[window.innerWidth, window.innerHeight, document.body.scrollHeight]`,
+      );
+      // Scroll as well as sweep: `Input.dispatchMouseEvent` addresses viewport
+      // coordinates, so a chart below the fold is simply not there to be
+      // hovered. The treemap that started this lives about two screens down,
+      // and a sweep of the first screen reported a clean run while the bug sat
+      // in it unchanged.
+      const step = Math.max(120, Math.floor(vh * 0.8));
+      for (let offset = 0; offset < Math.min(vh * 3, 6000); offset += step) {
+        await evaluate(`window.scrollTo(0, ${offset}); true`);
+        await sleep(120);
+        for (let y = 40; y < vh - 20; y += 55) {
+          for (let x = 30; x < vw; x += 85) {
+            await cdp.send(
+              'Input.dispatchMouseEvent',
+              { type: 'mouseMoved', x, y, button: 'none', buttons: 0 },
+              sessionId,
+            );
+          }
+        }
+      }
+      await evaluate('window.scrollTo(0, 0); true');
+      await sleep(400);
+      for (const n of noise.slice(mark)) record(route, '(hover sweep)', `${n.kind}: ${n.text}`);
+
       const count = problems.filter((p) => p.route === route).length;
       console.log(
         `  ${route.padEnd(24)} ${String(controls.length).padStart(3)} controls, ${String(done).padStart(3)} operated, ${count} problem(s)`,

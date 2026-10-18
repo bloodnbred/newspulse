@@ -1,12 +1,12 @@
 # AGENTS.md (v2): rules for coding agents (OpenCode)
 
-Read this file fully before every task. Then read ONLY `BLUEPRINT_V2.md` (once per session) and the doc for the current phase.
+Read this file fully before every task. There is one front end (`web/`) and it is the only one.
 
 ## Project
 NewsPulse Nifty: a Data Warehousing and Mining decision-support system. It combines Indian news headlines (Times of India), labelled statements (IFND), Nifty 50 index prices and per-stock Nifty 50 prices in a DuckDB fact-constellation warehouse, runs OLAP and mining operations, serves them through FastAPI, and presents them in a dashboard. This is an upgrade of the existing `dwm-india-news` v1 code. **Extend it. Do not rewrite working v1 code.**
 
 ## Stack
-Python 3.11+, DuckDB, pandas, numpy, pyarrow, scikit-learn, mlxtend, scipy, vaderSentiment, PyYAML, Typer, FastAPI, uvicorn, httpx, altair, pytest, ruff. Environment: Windows. Use `pathlib`, no Makefile, run everything as `python -m dwm <command>`.
+Python 3.11+, DuckDB, pandas, numpy, pyarrow, scikit-learn, mlxtend, scipy, vaderSentiment, PyYAML, Typer, FastAPI, uvicorn, httpx, pytest, ruff. Environment: Windows. Use `pathlib`, no Makefile, run everything as `python -m dwm <command>`.
 
 **Dependency discipline.** Everything in that list is declared in `requirements.txt`. Three things the pack asked for are **not** dependencies and must not become ones:
 - **`streamlit` and `plotly`** — not used. See "Corrections to the v2 pack". (`streamlit` happens to be present in `.venv`; ignore it. It is not declared and the app does not use it.)
@@ -37,11 +37,11 @@ dwm/                              # NOTE: package is at the ROOT. There is no sr
   inference/ __init__.py facts.py plain.py report.py
             insights.py brief.py                                  # v2
   api/      __init__.py app.py store.py                           # v2: new routers in app.py or api/routers/
-  ui/       charts.py        # Vega-Lite chart SPECS. Not a user interface. See note below.
+  ui/       charts.py        # shared Vega theme/axis helpers, used by olap/charts.py
 
-dashboard/
-  helpers.py                    # shared Python helpers (pct, humanise, find_uncautoned)
-  static/  index.html app.css app.js     # the dashboard. Vanilla JS SPA, no build step.
+web/                        # the dashboard. React 19 + Vite + Tailwind + ECharts
+  src/pages/   components/  lib/  hooks/  styles/
+  public/mock/ui/*.json      # recorded payloads for `?mock=1`
 
 sql/      schema.sql schema_v2.sql olap_cookbook.sql
 config/   datasets.yaml features.yaml mining.yaml topics.yaml        # v1
@@ -49,10 +49,10 @@ config/   datasets.yaml features.yaml mining.yaml topics.yaml        # v1
           stock_aliases.yaml sector_keywords.yaml                   # v2
 models/   *.joblib (gitignored)
 tests/    test_<phase>_*.py
-reports/ data/raw/ warehouse/ docs/ prompts/
+reports/ data/raw/ warehouse/ web/src/
 ```
 
-**`dwm/ui/` vs `dashboard/`:** `dwm/ui/charts.py` builds Vega-Lite specs served to the browser. `dashboard/static/` renders them. Do not confuse them, and do not add a `dashboard/ui.py`.
+**One front end.** `web/` is the product. There is no second dashboard and no second set of tests for one; a second path to the same number is two things that can disagree.
 
 ## Commands
 ```
@@ -67,7 +67,7 @@ python -m dwm mine <operation|all>
 python -m dwm report             # mining.json -> facts.json + report.md  (v2 alias: infer)
 python -m dwm usability          # v2: SUS + task summary from reports/usability_results.csv
 python -m dwm all --sample 50000 # v2: the whole pipeline in order
-python -m dwm serve              # FastAPI :8000 + the static dashboard, one process
+python -m dwm serve              # the API on :8000 (the dashboard is web/)
 pytest
 ```
 `load` and `infer` are aliases of `build` and `report`. All v1 command names still work. Do not rename or remove a v1 command.
@@ -91,29 +91,25 @@ pytest
 14. **Outliers.** Daily returns with `abs > 25%` are flagged `is_outlier = TRUE`, kept in the table, excluded from statistics and models.
 15. **Ambiguous stock aliases need context** (`config/stock_aliases.yaml`). Produce `reports/mention_audit_sample.csv` (200 stratified matches, empty `is_correct` column) and a script that computes precision once a human fills it. Never fill that column yourself.
 16. **Cubes store sums and counts, never averages.** Derive ratios at query time.
-17. **The dashboard talks to the API only.** All analytics live in `dwm/`, not in `dashboard/`. No SQL, no pandas analytics, no model code in dashboard files. New dashboard data comes from a new endpoint in `dwm/api/`, consumed through the `/ui/manifest` payload.
-18. **Every dashboard page must have:** a question box (the question it answers + the decision it supports), at least one chart with a title, labelled axes and a data-generated caption, a "how this was computed" panel naming the DWM concept, and the footer disclaimer.
-19. **Design rules.** The palette already exists in `dashboard/static/app.css` and is mirrored for Vega-Lite in `dashboard/helpers.py` (`CHART_PALETTE`); `tests/test_ui.py` asserts the two agree. **Do not introduce a new hue.** The v2 pack's teal/amber were dropped for this reason.
-    - **SUPERSEDED for the React front end (phase U1+).** `web-scaffold/src/styles/tokens.css` defines a new semantic palette — `--news` teal, `--price` amber, `--mining` violet, `--up`/`--down` for direction — and `docs/UI-BLUEPRINT.md` §3 mandates it. That reverses this bullet **for `web/` only**. Two conditions attach, both asserted in `tests/test_u1_ui_router.py`:
-      1. **Semantic hues are reserved.** `SECTOR_COLORS` must not contain `--news`, `--price`, `--mining`, `--up` or `--down`. The UI pack's palette opened with exactly those first three, which would have painted sector one in "news" beside a series that means news. A categorical palette must never be a semantic one.
-      2. **Direction is still direction only.** `--up`/`--down` mean a return went up or down. Never "good news" / "bad news".
-
-      `dashboard/static/app.css` and the Vega-Lite theme keep the old palette untouched; the two front ends coexist and each has its own tests.
-    - `--accent` is the only accent. In this product the subject is **news**, so news series use `--accent`.
-    - **Price/market is the recessive series**: `--muted` (or `--faint` for a reference line), so the news reads as the subject and the market as context around it.
-    - `--positive` / `--negative` carry direction only (up/down returns). Never decorative, never used for "good news" / "bad news".
-    - `--caution` marks what may not be claimed. It sits next to the number it qualifies, never in a footnote.
-    - Every surface builds from `.card`, `.kpi`, `.chart`, `.callout--*`, `.tablewrap` (see the `dashboard-design-system` skill). No inline colours, no new spacing values.
+17. **The front end talks to the API only.** All analytics live in `dwm/`, not in `web/`. No SQL, no pandas analytics, no model code in `web/src`. New dashboard data comes from a new endpoint in `dwm/api/ui.py`.
+18. **Every page must state its question and its limit.** What the page answers, what decision it supports, and - beside the number - what may not be claimed about it.
+19. **Design rules.** `web/src/styles/tokens.css` is the single source of truth for the look, and `web/src/lib/echartsTheme.ts` mirrors it for charts. `tests/test_u1_ui_router.py` asserts the two agree.
+    - The palette is semantic: `--news` (teal) for news series, `--price` (amber) for market, `--mining` (violet) for mined results, `--up`/`--down` for direction, `--caution` for what may not be claimed, `--muted`/`--faint` for context.
+    - **Do not introduce a new hue.** These are the colours; a seventh is a decision, not a convenience.
+    - **Semantic hues are reserved.** A categorical palette must never contain `--news`, `--price`, `--mining`, `--up` or `--down` - painting sector one in "news" beside a series that means news destroys the meaning of both.
+    - **Direction is direction only.** `--up`/`--down` mean a return went up or down, never "good news" / "bad news".
+    - `--caution` sits next to the number it qualifies, never in a footnote.
+    - Every surface builds from `.glass`, `.btn`, `.pill`, `.field`, `.kpi` and the ECharts theme. No inline colours, no new spacing values.
+    - **A class name used in `web/src` must exist.** An undefined class renders as a native browser control and no type checker can see it; `scripts/uicheck.mjs` exists because of that.
     - Loading states via cached calls. Empty states must name the command to run.
 20. **Disclaimer text** (educational, not investment advice, associations not causes, style not truth) appears on every page via the footer.
 21. **Performance:** the dashboard queries cubes and mining tables, not raw facts, for anything over 100k rows. Paginate headline lists (max 50 rows).
 22. **Data provenance.** Every fetched dataset records source URL, fetch time, row count and sha256 in a `.source.json` sidecar next to the cached file. Cache under `data/raw/` (gitignored) so the pipeline can rerun offline.
 
 ## Corrections to the v2 pack (do not undo these)
-The pack (`newspulse-nifty-v2-pack.zip`) was written against a different repository. These points are settled. Do not re-litigate them.
+The pack was written against a different repository. These points are settled. Do not re-litigate them.
 
-- **The dashboard is the existing vanilla-JS SPA in `dashboard/static/`, not Streamlit.** It has a design system in `app.css`, a Vega-Lite spec layer in `dwm/ui/charts.py`, and 27 dedicated tests in `tests/test_ui.py`. A Streamlit rewrite would break those tests and orphan the project skills. v2 pages are **added to the SPA**, reusing `app.js` renderers.
-- **`dashboard/ui.py` and `.streamlit/config.toml` from the pack were deliberately not installed.** Their structural ideas (question box, how-computed panel, insight caption, footer) are carried into the SPA as new components in V7. Their teal/amber palette is dropped: the SPA already has a WCAG-AA-tested two-palette design system in `app.css` that `tests/test_ui.py` locks down. See rule 19.
+- **The dashboard is React, not Streamlit and not the v1 vanilla SPA.** Both of those are gone. A Streamlit rewrite never happened; the v1 SPA was removed once `web/` could replace it, along with its Vega spec layer and the 27 tests that only guarded it.
 - **Package is `dwm/` at the repo root**, not `src/dwm/`.
 - **Config files are `topics.yaml` and there is no `config/lexicons/`** (word lists live in `dwm/features/lexicons.py`). The pack's layout section was wrong on both.
 - **Stock and meta data are fetched, not hand-supplied.** See below.
