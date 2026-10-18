@@ -104,10 +104,19 @@ $nodeVersion = (& node --version).TrimStart('v')
 Ok "node $nodeVersion"
 
 Step "Installing dashboard packages"
+# Not `--silent`. npm's own error is the only thing that says WHY an install
+# failed, and silencing it means a failed setup prints "npm install failed"
+# with nothing underneath. Quiet on success, the log on failure.
+$npmLog = Join-Path $env:TEMP 'newspulse-npm.log'
 Push-Location (Join-Path $Root 'web')
 try {
-    if (Test-Path 'package-lock.json') { & npm ci --silent } else { & npm install --silent }
-    if ($LASTEXITCODE -ne 0) { Die "npm install failed. Scroll up for the error." }
+    $npmArgs = if (Test-Path 'package-lock.json') { @('ci') } else { @('install') }
+    & npm @npmArgs *> $npmLog
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "    --- last lines of npm output ---" -ForegroundColor Red
+        Get-Content $npmLog -Tail 25 | ForEach-Object { Write-Host "    $_" }
+        Die "npm $($npmArgs[0]) failed. The full log is at $npmLog"
+    }
 } finally { Pop-Location }
 Ok "web/node_modules present"
 

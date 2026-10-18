@@ -70,8 +70,17 @@ command -v node >/dev/null 2>&1 || {
 ok "node $(node --version)"
 
 step "Installing dashboard packages"
+# Not `--silent`: npm's own error is the only thing that says WHY an install
+# failed, and silencing it means a failed setup prints "npm install failed" with
+# nothing underneath. Quiet on success, the log on failure.
+NPM_LOG=/tmp/newspulse-npm.log
 cd "$ROOT/web"
-if [ -f package-lock.json ]; then npm ci --silent; else npm install --silent; fi
+if [ -f package-lock.json ]; then npm ci > "$NPM_LOG" 2>&1; else npm install > "$NPM_LOG" 2>&1; fi
+if [ $? -ne 0 ]; then
+  echo "    --- last lines of npm output ---" >&2
+  tail -25 "$NPM_LOG" >&2
+  die "npm install failed. The full log is at $NPM_LOG"
+fi
 cd "$ROOT"
 ok "web/node_modules present"
 
