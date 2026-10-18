@@ -68,13 +68,13 @@ Pick a **cube** (a pre-calculated table). Pick **measures** (headline count, ave
 
 The chart redraws as you go. Underneath, the drawer shows **the actual SQL query** that produced what you're looking at, and you can copy it. You never have to trust the chart — you can read the question it asked.
 
-It will also refuse things. Try adding *Sector* while the *News* cube is selected: it says no, and explains why with the actual number of rows that would result. A tool that silently gives you a wrong answer is worse than one that says no.
+It will also refuse things, and tell you why. Try dragging **Sector** in while the **News** cube is selected. *Sector* belongs to the **Market** cube, and the two cubes are different shapes — one row per day per topic against one row per stock per day — so a query across both would count every headline once for every stock that traded that day. Cube Studio says exactly that and suggests slicing one and using Drill-across to bring the other in. A tool that silently gives you a wrong answer is worse than one that says no.
 
 ### Stock 360 — one company at a time
 
-Every tracked company has a page: its price history, what the news said about it on each day, its risk-signal rate, how often it's mentioned.
+Every one of the 50 tracked companies has a page: its price history, what the news said about it on each day, its risk-signal rate, how often it's mentioned.
 
-Three companies show honest gaps rather than blank space: some listed after our data ends, some have no price history in the window. The page says which and why.
+**Seven of them have gaps, and the pages say so rather than showing an empty chart.** Three (Eternal, Jio Financial, Max Healthcare) joined the index after our data ends, so there is no price history for them at all. Four (BSE, HDFC Life, IndiGo, SBI Life) joined partway through the window, so their charts start late. That's a gap in our data, not a gap in those companies.
 
 ### Event Lab — big market events
 
