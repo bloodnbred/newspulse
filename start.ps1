@@ -104,18 +104,30 @@ $nodeVersion = (& node --version).TrimStart('v')
 Ok "node $nodeVersion"
 
 Step "Installing dashboard packages"
-# Not `--silent`. npm's own error is the only thing that says WHY an install
-# failed, and silencing it means a failed setup prints "npm install failed"
-# with nothing underneath. Quiet on success, the log on failure.
+# Three things here are deliberate and each one cost a failed run.
+#
+# 1. `npm.cmd`, not `npm`. PowerShell resolves `npm` to the `npm.ps1` shim in
+#    the Node install directory, and splatting an argument array into that shim
+#    makes it invoke `npm config` instead of `npm ci` - so the install fails
+#    with a usage error and nothing resembling the real problem.
+# 2. An explicit branch, not `@npmArgs`. Same cause: the splat is what breaks.
+# 3. Not `--silent`. npm's own error is the only thing that says WHY an install
+#    failed, and silencing it means a failed setup prints "npm install failed"
+#    with nothing underneath. Quiet on success, the log on failure.
 $npmLog = Join-Path $env:TEMP 'newspulse-npm.log'
 Push-Location (Join-Path $Root 'web')
 try {
-    $npmArgs = if (Test-Path 'package-lock.json') { @('ci') } else { @('install') }
-    & npm @npmArgs *> $npmLog
+    if (Test-Path 'package-lock.json') {
+        & npm.cmd ci *> $npmLog
+        $npmWhat = 'ci'
+    } else {
+        & npm.cmd install *> $npmLog
+        $npmWhat = 'install'
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "    --- last lines of npm output ---" -ForegroundColor Red
         Get-Content $npmLog -Tail 25 | ForEach-Object { Write-Host "    $_" }
-        Die "npm $($npmArgs[0]) failed. The full log is at $npmLog"
+        Die "npm $npmWhat failed. The full log is at $npmLog"
     }
 } finally { Pop-Location }
 Ok "web/node_modules present"
