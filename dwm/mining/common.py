@@ -72,12 +72,30 @@ def chronological_split(
         )
     n_train = max(1, int(len(unique) * train_fraction))
     n_valid = max(1, int(len(unique) * validation_fraction))
-    if n_train + n_valid >= len(unique):
-        n_valid = 1
-        n_train = len(unique) - 2
 
-    train_end = unique[min(n_train, len(unique) - 1)]
-    validation_end = unique[min(n_train + n_valid, len(unique) - 1)]
+    # Positions, not values, so the clamps below are about the size of the
+    # split rather than about which dates happen to sort where.
+    i_train = min(n_train, len(unique) - 1)
+    i_valid = min(n_train + n_valid, len(unique) - 1)
+
+    # The last date must land in test - the docstring has always promised it.
+    # As soon as there are only a handful of distinct dates the fractions round
+    # so that `i_valid` reaches the final index, and `dates > validation_end`
+    # then selects nothing: the test split comes out empty and every estimator
+    # raises "Found array with 0 sample(s)". With a `--sample 20000` build
+    # that is the crash that stopped the whole pipeline on a fresh machine.
+    if i_valid >= len(unique) - 1:
+        i_valid = len(unique) - 2
+    if i_valid < 1:
+        raise ValueError(
+            f"need at least 3 distinct dates to give train, validation and test "
+            f"one each, got {len(unique)}"
+        )
+    # Validation gets at least one date, and train at least one before it.
+    i_train = max(0, min(i_train, i_valid - 1))
+
+    train_end = unique[i_train]
+    validation_end = unique[i_valid]
 
     return Split(
         train=np.flatnonzero(dates <= train_end),

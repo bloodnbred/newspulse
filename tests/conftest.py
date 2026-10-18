@@ -22,6 +22,52 @@ from dwm.config import Settings
 
 
 @pytest.fixture(autouse=True)
+def never_write_to_the_real_warehouse(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refuse any test that opens the project's warehouse for writing.
+
+    The suite is meant to be safe to run at any time, and `reports_dir` below
+    exists for exactly that reason: a test run once replaced the real
+    `reports/mining.json` with results from a ten-row fixture. The warehouse is
+    the same hazard and far worse - 591 MB and an hour to rebuild.
+
+    `dwm.db.connect` defaults to `create=True`, which opens read-write. Any test
+    that constructs a bare `Settings()` and calls a pipeline function therefore
+    resolves `db_path` to the real warehouse and can truncate it. One did, and
+    the suite reported 24 failures that all read `Table with name fact_headline
+    does not exist!` before anyone worked out that the database had been
+    emptied rather than that the tests were broken.
+
+    So the refusal is here, in one place, before anything can open the file. A
+    test that genuinely needs a writable database has to build a `Settings`
+    pointed at `tmp_path`, which is what every other fixture here does.
+    """
+    from dwm import db
+    from dwm.config import default_db_path
+
+    real = default_db_path().resolve()
+    original = db.connect
+
+    def guarded(settings=None, *, create: bool = True):
+        path = (settings.db_path if settings is not None else db.default_db_path())
+        try:
+            resolved = Path(path).resolve()
+        except OSError:
+            resolved = Path(path)
+        # `read_only` in the settings means the caller only ever reads, which
+        # DuckDB enforces itself; those opens are fine.
+        read_only = getattr(settings, "read_only", False) if settings is not None else False
+        if resolved == real and (create or not read_only):
+            raise RuntimeError(
+                f"a test tried to open the project's warehouse for writing: {resolved}\n"
+                "Tests must build a Settings() pointed at tmp_path. Fix the test, "
+                "or copy the database first - do not relax this guard."
+            )
+        return original(settings, create=create)
+
+    monkeypatch.setattr(db, "connect", guarded)
+
+
+@pytest.fixture(autouse=True)
 def reports_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point every generated-artefact path at this test's own directory.
 

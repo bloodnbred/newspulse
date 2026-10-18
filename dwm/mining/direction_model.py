@@ -197,6 +197,23 @@ def run(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     rules_text = None
 
+    # Defence in depth. `chronological_split` now guarantees every split holds
+    # at least one date, but a frame that is filtered again downstream - or a
+    # target that is null across the whole test window - can still empty one.
+    # Estimators raise a numpy shape error for that, which names neither the
+    # stage nor the remedy, so the run is refused here with a sentence a reader
+    # can act on.
+    for label, idx in (("train", split.train), ("validation", split.validation), ("test", split.test)):
+        if len(idx) == 0:
+            return {
+                "error": (
+                    f"the {label} split has no complete stock-days after dropping "
+                    f"rows with a missing feature or target. The corpus is too "
+                    f"small for a 70/15/15 chronological split - rebuild with a "
+                    f"larger `--sample`, or without one."
+                )
+            }
+
     for name, model in estimators.items():
         model.fit(X[split.train], y[split.train])
         for label, idx in (("train", split.train), ("test", split.test)):
