@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { CalendarClock, Database, FileSearch, Home, Layers, LineChart, Network, Sparkles } from 'lucide-react';
 import { Ticker } from './Ticker';
+import { CommandPalette, PALETTE_KEY } from './CommandPalette';
+import { Tour } from './Tour';
 import { FilterBar } from './FilterBar';
 import { IS_MOCK, useApi } from '../lib/api';
 import type { TapeItem } from '../types';
@@ -41,6 +43,14 @@ export function AppShell({ filterBar }: { filterBar?: ReactNode }) {
               <Icon size={18} aria-hidden="true" /> {label}
             </NavLink>
           ))}
+          <kbd
+            data-tour="palette"
+            className="mt-3 text-[10px] px-2 py-1 rounded self-start"
+            style={{ background: 'rgba(148,163,184,.12)', color: 'var(--muted)' }}
+            title="Command palette"
+          >
+            Ctrl+{PALETTE_KEY.toUpperCase()}
+          </kbd>
         </nav>
         <main className="flex-1 min-w-0 p-4 md:p-6 pb-24 md:pb-6">
           {filterBar ?? (showFilters ? <FilterBar /> : null)}
@@ -50,6 +60,10 @@ export function AppShell({ filterBar }: { filterBar?: ReactNode }) {
             Headline signals measure writing style, not truth.
           </footer>
         </main>
+        {/* The palette is mounted once, here, so Ctrl-K works from every route
+            rather than only on the pages that remembered to include it. */}
+        <CommandPalette />
+        <Tour />
       </div>
       <nav className="md:hidden fixed bottom-0 inset-x-0 glass flex justify-around py-2" aria-label="Mobile">
         {NAV.slice(0, 5).map(({ to, label, icon: Icon }) => (

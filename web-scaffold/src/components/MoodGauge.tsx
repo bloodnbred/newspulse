@@ -74,7 +74,7 @@ export function MoodGauge({ score }: Props) {
   }
 
   return (
-    <div className="glass p-4 flex flex-col items-center justify-center h-full">
+    <div className="glass p-4 flex flex-col items-center justify-center h-full" data-tour="mood">
       <div className="text-[11px] uppercase tracking-widest" style={{ color: 'var(--muted)' }}>
         Market mood
       </div>

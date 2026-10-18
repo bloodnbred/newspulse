@@ -107,8 +107,11 @@ export function InsightsCarousel({ cards }: { cards: InsightCard[] }) {
       <h3 className="text-base font-semibold mt-3" style={{ lineHeight: 1.35 }}>
         {card.title}
       </h3>
+      {/* `caution`, not `text` - the field does not exist, so this rendered
+          as an empty paragraph and the carousel looked like a card with a
+          title and no content. */}
       <p className="text-sm mt-2" style={{ color: 'var(--muted)', lineHeight: 1.55 }}>
-        {card.text}
+        {card.caution}
       </p>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 mt-4">
         {evidenceRows(card.evidence).map(({ key, value }) => (

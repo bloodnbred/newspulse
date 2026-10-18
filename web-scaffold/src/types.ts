@@ -483,9 +483,60 @@ export interface SampleSet {
   plain: { headline: string; publish_date: string; sensational_score: number; topic: string }[];
 }
 
+export interface SchemaColumn {
+  name: string;
+  type: string;
+}
+
+/** One row per table, read from DuckDB's own catalogue. */
+export interface SchemaTable {
+  name: string;
+  column_count: number;
+  rows: number;
+  columns: SchemaColumn[];
+}
+
+export interface EtlStep {
+  run_id: string;
+  dataset_code: string;
+  step: string;
+  status: string;
+  rows_read: number | null;
+  rows_loaded: number | null;
+  rows_rejected: number | null;
+  detail: string | null;
+}
+
+export interface StockHit {
+  symbol: string;
+  company_name: string;
+  sector: string | null;
+}
+
+export interface SectorHit {
+  sector_name: string;
+}
+
 export interface InsightCard {
-  id: string; title: string; text: string; concept: Concept; page: string;
-  evidence: Record<string, number | string>;
+  id: string;
+  title: string;
+  /** The card's whole explanation, written into `caution` by the builder
+   *  because it is a caveat - what the figure does NOT show. There is no `text`
+   *  field, and the first version rendered `undefined` in the card body. */
+  caution: string;
+  concept: string;
+  page: string;
+  /** Values are not all scalars: `surprise_days` carries a list of rows and a
+   *  thresholds object, so anything reading this has to handle all three. */
+  evidence: Record<string, unknown>;
+}
+
+export interface InsightsPayload {
+  cards: InsightCard[];
+  /** Anything the builder declined to state, and why. */
+  withheld: { id?: string; reason: string }[];
+  count: number;
+  of: number;
 }
 export interface HomeSummary {
   devSample: boolean;

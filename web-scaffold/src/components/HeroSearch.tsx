@@ -72,7 +72,7 @@ export function HeroSearch() {
             </p>
           )}
           {brief?.kind === 'none' && (
-            <div className="glass p-4">
+            <div className="glass p-4" data-tour="search">
               <p className="text-sm" style={{ color: 'var(--muted)' }}>
                 {brief.message}
               </p>
