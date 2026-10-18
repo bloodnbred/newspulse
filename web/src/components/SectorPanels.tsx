@@ -46,6 +46,7 @@ export function SectorTreemap({
           const d = p.data as
             | { name?: string; value?: unknown[]; sector?: SectorHeat }
             | undefined;
+          if (!d) return '';
           const s = d.sector;
           const news = Number(Array.isArray(d.value) ? d.value[0] : 0);
           const ret = s?.avg_return_pct ?? 0;
