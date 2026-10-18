@@ -195,20 +195,44 @@ def ingest(
     settings: Settings, *, datasets: list[str] | None = None, force_download: bool = False,
     skip_fetch: bool = False,
 ) -> list[IngestOutcome]:
-    """Ingest the requested datasets, defaulting to every enabled one."""
+    """Ingest the requested datasets, defaulting to every enabled v1 one.
+
+    `datasets=None` means the v1 sources only, which is what it has always
+    meant and what the v1 tests assume. `--dataset all` is the way to ask for
+    the v2 sources as well, and it is the only spelling that reaches both loaders.
+
+    That distinction was documented in `AGENTS.md` and never implemented:
+    `--dataset all` fell through to the unknown-name check and raised
+    `KeyError('unknown dataset(s): [all]')`, so the one command a new machine
+    needs could not fetch the constituent list or the per-company prices. With
+    no `stg_meta`, `dim_trading_calendar` is never built, and the `link` stage
+    then stops with a message telling you to run a command you had just run.
+    """
     specs = load_datasets_config()
     v2_results: list[IngestOutcome] = []
     if datasets is None:
         wanted = sorted(specs)
+        v2_wanted: list[str] = []
     else:
-        # v2 datasets are routed to their own loader rather than rejected, so
-        # `--dataset all` and `--dataset stocks` behave as documented.
-        wanted = [d for d in datasets if d not in V2_DATASETS]
-        v2_wanted = [d for d in datasets if d in V2_DATASETS]
-        unknown = [d for d in datasets if d not in specs and d not in V2_DATASETS]
+        # `all` expands to every v1 spec plus both v2 loaders. The v2 sources
+        # are routed to `ingest_v2` rather than rejected, so `--dataset all` and
+        # `--dataset stocks` both behave as documented.
+        requested: list[str] = []
+        for name in datasets:
+            if name == "all":
+                requested.extend(sorted(specs))
+                requested.extend(V2_DATASETS)
+            else:
+                requested.append(name)
+        # `all` alongside an explicit name would otherwise list it twice.
+        requested = list(dict.fromkeys(requested))
+        wanted = [d for d in requested if d not in V2_DATASETS]
+        v2_wanted = [d for d in requested if d in V2_DATASETS]
+        unknown = [d for d in requested if d not in specs and d not in V2_DATASETS]
         if unknown:
             raise KeyError(
-                f"unknown dataset(s) {unknown}; known: {sorted(set(specs) | set(V2_DATASETS))}"
+                f"unknown dataset(s) {unknown}; known: "
+                f"{sorted(set(specs) | set(V2_DATASETS) | {'all'})}"
             )
         if v2_wanted:
             v2_results = [

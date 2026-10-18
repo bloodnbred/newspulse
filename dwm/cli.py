@@ -369,9 +369,13 @@ def run_all(
     would report a confidently wrong number.
     """
     stages: list[tuple[str, object]] = [
+        # `--dataset all`, not the bare default. The default is the three v1
+        # sources; without meta and stocks there is no constituent list, no
+        # trading calendar and no per-company prices, and the `link` stage
+        # fails asking for a `dwm build` that already ran.
         ("ingest", lambda: ingest(  # noqa: PLR1702
             db=db, sample=sample, years=years, chunk=chunk,
-            dataset=None, force_download=False, skip_fetch=skip_fetch, verbose=False,
+            dataset=["all"], force_download=False, skip_fetch=skip_fetch, verbose=False,
         )),
         ("etl", lambda: etl(db=db, sample=sample, years=years, chunk=chunk)),
         ("features", lambda: features(db=db, sample=sample, years=years, chunk=chunk)),
