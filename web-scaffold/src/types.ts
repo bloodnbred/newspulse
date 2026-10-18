@@ -496,6 +496,17 @@ export interface SchemaTable {
   columns: SchemaColumn[];
 }
 
+/** `/ui/etl` is an OBJECT, not a list: the steps plus the counters and the
+ *  caveat that qualifies them. The first version read it as an array and the
+ *  funnel tab threw on `steps.reduce` - the same mistake as `/ui/insights`, and
+ *  the reason both are typed here rather than inferred at the call site. */
+export interface EtlPayload {
+  funnel: EtlStep[];
+  outlier_rows: number;
+  linking: { path: string }[];
+  caveat: string;
+}
+
 export interface EtlStep {
   run_id: string;
   dataset_code: string;

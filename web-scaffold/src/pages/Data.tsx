@@ -8,7 +8,7 @@ import { useApi } from '../lib/api'
 import { fmtNum } from '../lib/format'
 import Chart from '../components/Chart'
 import { SEMANTIC } from '../lib/echartsTheme'
-import type { EtlStep, SchemaTable } from '../types'
+import type { EtlPayload, EtlStep, SchemaTable } from '../types'
 
 /** Fact tables are the subject; everything else hangs off one.
  *
@@ -161,7 +161,7 @@ function useConstellation(
 
 export default function Data() {
   const schema = useApi<{ tables: SchemaTable[] }>('/ui/schema', {}, { withFilters: false })
-  const etl = useApi<EtlStep[]>('/ui/etl', {}, { withFilters: false })
+  const etl = useApi<EtlPayload>('/ui/etl', {}, { withFilters: false })
   // In the URL, like the Mining tabs: "here is the ETL funnel" is a thing
   // people say to each other, and a local-only tab cannot be linked to.
   const [tab, setTab] = useState<'schema' | 'etl'>(() => {
@@ -251,7 +251,9 @@ export default function Data() {
                 nodesDraggable
                 nodesConnectable={false}
                 elementsSelectable
-                proOptions={{ hideAttribution: true }}
+                // Attribution left in place: hiding it is a Pro feature, and a
+                // console warning on every load of this page is a small price for
+                // not misrepresenting a licence.
                 style={{ background: 'transparent' }}
               >
                 <Background color="rgba(148,163,184,.12)" gap={22} size={1} />
@@ -320,7 +322,14 @@ export default function Data() {
         </div>
       )}
 
-      {tab === 'etl' && <EtlFunnel steps={etl.data?.data ?? []} meta={etl.data?.meta} loading={etl.isLoading} />}
+      {tab === 'etl' && (
+        <EtlFunnel
+          steps={etl.data?.data.funnel ?? []}
+          caveat={etl.data?.data.caveat ?? null}
+          meta={etl.data?.meta}
+          loading={etl.isLoading}
+        />
+      )}
     </div>
   )
 }
@@ -332,9 +341,10 @@ export default function Data() {
  *  usable, which is usually where a reader's question lives.
  */
 function EtlFunnel({
-  steps, meta, loading,
+  steps, caveat, meta, loading,
 }: {
   steps: EtlStep[]
+  caveat?: string | null
   meta?: { note?: string; concept?: string; rows?: number }
   loading: boolean
 }) {
@@ -387,13 +397,13 @@ function EtlFunnel({
 
   return (
     <div className="flex flex-col gap-4">
-      {meta?.note && (
+      {(caveat || meta?.note) && (
         <div
           className="glass p-3 flex items-start gap-2 text-xs"
           style={{ background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.22)', color: 'var(--caution)', lineHeight: 1.55 }}
         >
           <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span>{meta.note}</span>
+          <span>{caveat || meta?.note}</span>
         </div>
       )}
       <div className="grid gap-4 lg:grid-cols-12">

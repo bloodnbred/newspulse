@@ -100,16 +100,25 @@ export function CalendarHeatmap({
           margin: 12,
         },
         // Only January is labelled, and the names are supplied explicitly rather
-        // than via `nameMap: 'en'`. The locale build returns "January", so a
-        // formatter testing for "Jan" matched nothing and every month label
-        // came out empty - a calendar with no months on it.
+        // than via `nameMap: 'en'` - the locale build returns "January", so a
+        // formatter testing for "Jan" matched nothing and every month label came
+        // out empty.
+        //
+        // ECharts calls this with the month INDEX when a `nameMap` array is
+        // given and with the name otherwise, so both are handled. Calling
+        // `startsWith` on the index threw inside ECharts' own render, which took
+        // the whole calendar card down on every load.
         monthLabel: {
           show: true,
           color: 'var(--muted)',
           fontSize: 9,
           nameMap: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-          formatter: (p: string) => (p.startsWith('Jan') ? 'Jan' : ''),
+          formatter: (p: string | number) => {
+            const isJanuary =
+              typeof p === 'number' ? p === 0 : String(p).startsWith('Jan')
+            return isJanuary ? 'Jan' : ''
+          },
         },
         dayLabel: {
           show: true,
