@@ -6,6 +6,15 @@
   --text: #E6EDF7; --muted: #93A4BF;
   --news: #14B8A6; --price: #F59E0B; --mining: #8B5CF6;
   --up: #22C55E; --down: #EF4444;
+  /* Two tokens the app used everywhere and this file never declared, so
+   * `var(--caution)` and `var(--faint)` resolved to nothing and the property
+   * using them was dropped at computed-value time. `--caution` is the colour
+   * that marks what may not be claimed - the one that has to be impossible to
+   * miss - and it was rendering as ordinary inherited text on twelve files.
+   * Values match the vanilla SPA's dark theme in dashboard/static/app.css so
+   * the two front ends say the same thing. */
+  --caution: #FFB340;
+  --faint: #86868B;
   --radius: 16px;
   --glow-news: 0 0 0 1px rgba(20, 184, 166, .35), 0 8px 40px -8px rgba(20, 184, 166, .35);
   --ease: cubic-bezier(.22, 1, .36, 1);
@@ -16,6 +25,8 @@
   --surface: rgba(255, 255, 255, .78); --surface-solid: #FFFFFF;
   --border: rgba(15, 23, 42, .12);
   --text: #0F172A; --muted: #475569;
+  --caution: #9A6200;
+  --faint: #74747C;
   --glow-news: 0 0 0 1px rgba(20, 184, 166, .45), 0 8px 30px -10px rgba(20, 184, 166, .35);
   color-scheme: light;
 }
@@ -72,6 +83,69 @@ body { margin: 0; background: var(--bg); color: var(--text);
 .mock-ribbon { position: fixed; top: 10px; right: -40px; z-index: 50; transform: rotate(35deg);
   background: var(--down); color: #fff; font-size: 11px; font-weight: 700; letter-spacing: .1em;
   padding: 4px 48px; pointer-events: none; }
+
+/* --------------------------------------------------------------------------
+   Form and action controls.
+
+   These class names were used across the app and never written down. Because
+   Tailwind's preflight resets `button`, `input` and friends to their browser
+   defaults, every control below was rendering unstyled: native buttons with
+   the platform's grey chrome, sector filters as a run of bare words, and the
+   filter bar's labels sitting inline with the inputs they name ("Fromdd-mm-yyyy").
+   Defined here rather than as utility soup at each call site so that a button
+   looks like a button everywhere, including the ones added next month.
+   -------------------------------------------------------------------------- */
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: .45rem;
+  padding: .5rem .9rem; border-radius: 10px;
+  border: 1px solid var(--border); background: rgba(148, 163, 184, .07);
+  color: var(--text); font: inherit; font-size: .82rem; font-weight: 500; line-height: 1.25;
+  cursor: pointer; white-space: nowrap; text-decoration: none;
+  transition: background .18s var(--ease), border-color .18s var(--ease), color .18s var(--ease); }
+.btn:hover:not(:disabled) { border-color: rgba(20, 184, 166, .45); background: rgba(20, 184, 166, .10); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: .38; cursor: not-allowed; }
+.btn:focus-visible { outline: 2px solid var(--news); outline-offset: 2px; }
+
+/* The one action on a screen that the screen is for. Filled, so it is
+   unambiguous in a row of quiet buttons. Dark ink on teal: the fill is light
+   enough that dark text is the higher-contrast pairing. */
+.btn--primary { background: var(--news); border-color: var(--news); color: #04211F; font-weight: 600; }
+.btn--primary:hover:not(:disabled) { background: #0FA396; border-color: #0FA396; color: #04211F; }
+
+/* A small tag. Also used as a toggle (the sector filters carry aria-pressed),
+   so it has both states rather than assuming it is inert text. */
+.pill { display: inline-flex; align-items: center; gap: .3rem;
+  padding: .18rem .55rem; border-radius: 999px;
+  border: 1px solid var(--border); background: rgba(148, 163, 184, .07);
+  color: var(--muted); font-size: .7rem; line-height: 1.5; white-space: nowrap;
+  transition: background .18s var(--ease), border-color .18s var(--ease), color .18s var(--ease); }
+button.pill { cursor: pointer; font-family: inherit; }
+button.pill:hover { border-color: rgba(20, 184, 166, .4); color: var(--text); }
+button.pill:focus-visible { outline: 2px solid var(--news); outline-offset: 2px; }
+
+/* Label above control. The column is the point: inline, the label ran into
+   the input it names and the `gap` between fields collapsed with it. */
+.field { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+.field__label { font-size: .67rem; font-weight: 600; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--muted); }
+.field__input { min-height: 32px; padding: .42rem .6rem; border-radius: 9px;
+  border: 1px solid var(--border); background: rgba(7, 11, 20, .5); color: var(--text);
+  font: inherit; font-size: .82rem;
+  transition: border-color .18s var(--ease), box-shadow .18s var(--ease); }
+.field__input:focus { outline: none; border-color: var(--news); box-shadow: 0 0 0 3px rgba(20, 184, 166, .18); }
+.field__input::placeholder { color: var(--faint); }
+/* The native date picker draws its own glyph, which is a dark icon on a dark
+   field and disappears. Invert it only for that control. */
+:root:not([data-theme="light"]) .field__input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(.75); cursor: pointer; }
+:root:not([data-theme="light"]) input[type="checkbox"] { accent-color: var(--news); }
+:root:not([data-theme="light"]) .field__input[type="date"]::-webkit-datetime-edit { color: var(--text); }
+
+.bullets { margin: .5rem 0 0; padding-left: 1.1rem;
+  color: var(--muted); font-size: .8rem; line-height: 1.6; }
+.bullets li { margin-bottom: .2rem; }
+.dim { color: var(--faint); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

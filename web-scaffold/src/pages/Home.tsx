@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AlertTriangle } from 'lucide-react'
 import { useApi } from '../lib/api'
 import { KpiCard } from '../components/KpiCard'
 import { HeroSearch } from '../components/HeroSearch'
@@ -9,20 +10,13 @@ import { SectorTreemap, SurpriseCards } from '../components/SectorPanels'
 import { CalendarHeatmap } from '../components/CalendarHeatmap'
 import { InsightsCarousel, SectorRace, ActionTiles } from '../components/Panels'
 import type {
-  DayCell, InsightCard, Kpi, Meta, SectorHeat, SeriesPointFull, SurpriseDay,
+  DayCell, HomeSummary, Meta,
 } from '../types'
 
-interface HomeSummary {
-  devSample: boolean
-  window: { start: string; end: string }
-  kpis: Kpi[]
-  mood: { score: number; label: string; percentile: number }
-  main: SeriesPointFull[]
-  events: { date: string; label: string; type: string }[]
-  sectorHeat: SectorHeat[]
-  surprise: SurpriseDay[]
-  insights: InsightCard[]
-}
+/* This page used to declare its own local copy of `HomeSummary`, shadowing the
+ * one in types.ts. Two declarations of one payload is two things that can
+ * disagree, and they had: the local copy had no `scope`, so the filter note the
+ * server sends had nowhere to land and TypeScript could not have told anyone. */
 
 /** The homepage, per docs/UI-BLUEPRINT.md §6.1.
  *
@@ -66,9 +60,15 @@ export default function Home() {
           <h1 className="text-3xl md:text-4xl font-bold" style={{ lineHeight: 1.15 }}>
             Watch India&rsquo;s news and the Nifty move together.
           </h1>
+          {/* The range shown is the range the figures actually cover. With a
+              filter on, printing the corpus window beside numbers that came
+              from four months of it is the kind of small wrongness that makes a
+              reader distrust every other number on the page. */}
           <p className="text-sm mt-2 mb-5" style={{ color: 'var(--muted)' }}>
             {home
-              ? `${home.window.start} to ${home.window.end} · ${home.kpis.length} figures · every one from a query`
+              ? `${home.scope.applied.from ?? home.window.start} to ${
+                  home.scope.applied.to ?? home.window.end
+                } · ${home.kpis.length} figures · every one from a query`
               : 'Reading the warehouse…'}
           </p>
           <HeroSearch />
@@ -82,25 +82,55 @@ export default function Home() {
         </div>
       </section>
 
+      {/* What the filter moved, and what it could not.
+          *
+          * Placed directly under the filter bar, in the caution colour, and only
+          * while a filter is active. The server writes this sentence next to the
+          * queries that back it, so it cannot drift from what the SQL does - and
+          * it is the difference between a reader who knows that headline volume
+          * did not narrow and one who assumes the whole page did. */}
+      {home && home.scope.applied.count > 0 && (
+        <div
+          className="flex items-start gap-2.5 px-4 py-3 rounded-2xl text-xs leading-relaxed"
+          style={{
+            background: 'color-mix(in srgb, var(--caution) 9%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--caution) 26%, transparent)',
+            color: 'var(--caution)',
+          }}
+          role="note"
+        >
+          <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} aria-hidden="true" />
+          <span>{home.scope.note}</span>
+        </div>
+      )}
+
       {/* 2. KPI row. */}
       <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {isLoading
           ? Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="skeleton h-28 rounded-2xl" aria-busy="true" />
             ))
-          : home?.kpis.map((k, i) => <KpiCard key={k.id} kpi={k} index={i} />)}
+          : home?.kpis.map((k, i) => (
+              <KpiCard
+                key={k.id}
+                kpi={k}
+                index={i}
+                filtered={(home.scope.applied.count ?? 0) > 0}
+              />
+            ))}
       </section>
 
       {/* 3. Time Machine and the day it drives. */}
       <section>
+        {/* No heading here: the chart card below already titles itself "Time
+            Machine" and carries the concept chip. Two titles for one chart
+            stacked two inches apart read as a rendering mistake. The description
+            earns its place here because the card's title does not say it. */}
         <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-          <div>
-            <h2 className="text-lg font-semibold">Time Machine</h2>
-            <p className="text-xs" style={{ color: 'var(--muted)' }}>
-              News against the Nifty across the window. The slider filters the whole
-              page; the crosshair opens a day.
-            </p>
-          </div>
+          <p className="text-xs" style={{ color: 'var(--muted)' }}>
+            News against the Nifty across the window. The slider filters the whole
+            page; the crosshair opens a day.
+          </p>
           <TimeMachineControls
             metric={metric}
             onMetric={setMetric}

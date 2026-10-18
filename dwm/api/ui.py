@@ -30,16 +30,18 @@ most of a request here is the queries.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import duckdb
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from dwm.logging_utils import get
@@ -239,6 +241,336 @@ def _window() -> tuple[str, str]:
     if row and row[0] and row[1]:
         return str(row[0]), str(row[1])
     return "2015-06-30", "2020-06-30"
+
+
+# ---------------------------------------------------------------------------
+# The reader's global filter
+# ---------------------------------------------------------------------------
+
+#: ISO dates only. The value is checked against this and then converted to an
+#: integer before it reaches a SQL string, so a reader-supplied parameter can
+#: only ever contribute digits. FastAPI ignores query parameters an endpoint does
+#: not declare, which is precisely why a filter the server does not understand
+#: used to disappear without a word instead of being rejected.
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+#: Cube grain is single-dimension: `cube_month_topic` knows topics and has no
+#: sector column, `cube_sector_month` knows sectors and has no topic column.
+#: There is no cube carrying both, and building one is not possible from the
+#: warehouse as it stands - `fact_headline` has a topic but NO sector, and a
+#: headline only reaches a sector through `fact_news_stock_mention`, which is
+#: sparse by construction and whose precision nobody has measured yet
+#: (`reports/mention_audit_sample.csv` is still blank). So a sector filter
+#: moves the sector-shaped figures and cannot move the topic-shaped ones, and
+#: the response says which is which rather than letting a reader assume the
+#: whole page narrowed.
+TOPIC_DIMENSION = "topic"
+SECTOR_DIMENSION = "sector"
+
+
+def _date_int(value: str | None, field: str) -> int | None:
+    """ISO `YYYY-MM-DD` to the INTEGER `date_key` the cubes are keyed on.
+
+    `2015-06-30` becomes `20150630`. Rejects anything else with a 422 rather
+    than passing it through, because a silently-ignored filter is the single
+    most misleading thing this API could do.
+    """
+    if not value:
+        return None
+    if not _ISO_DATE.match(value):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field}={value!r} is not a date. Use YYYY-MM-DD.",
+        )
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:  # e.g. 2015-02-30 passes the regex but is not a date
+        raise HTTPException(
+            status_code=422, detail=f"{field}={value!r} is not a real date."
+        ) from exc
+    return parsed.year * 10000 + parsed.month * 100 + parsed.day
+
+
+def _csv(value: str | None) -> tuple[str, ...]:
+    """A comma-separated query parameter as a tuple, blanks dropped."""
+    return tuple(p.strip() for p in (value or "").split(",") if p.strip())
+
+
+@dataclass(frozen=True)
+class Scope:
+    """One request's filter, parsed once and expressed as SQL.
+
+    Holds no connection and runs no query, so it can be built from query
+    parameters before any handle is taken. Every fragment method returns a
+    predicate beginning with `AND`, or an empty string when that dimension is
+    not filtered - so a query with no filter reads exactly as it did before,
+    rather than gaining `AND 1=1` noise in the "how this was computed" drawer.
+    """
+
+    lo: int | None = None
+    hi: int | None = None
+    sectors: tuple[str, ...] = ()
+    topics: tuple[str, ...] = ()
+    include_market: bool = False
+
+    @property
+    def active(self) -> bool:
+        return bool(self.lo or self.hi or self.sectors or self.topics or self.include_market)
+
+    @property
+    def count(self) -> int:
+        return (
+            (1 if self.lo else 0)
+            + (1 if self.hi else 0)
+            + len(self.sectors)
+            + len(self.topics)
+            + (1 if self.include_market else 0)
+        )
+
+    # -- SQL fragments ----------------------------------------------------
+    # Names come from the reader, so they are never interpolated directly:
+    # each is bound through a dimension table by a parameter placeholder.
+
+    def day(self, alias: str = "", column: str = "date_key") -> str:
+        """`cube_day_topic`, `fact_news_sector_daily`, `fact_stock_daily`."""
+        prefix = f"{alias}." if alias else ""
+        parts = []
+        if self.lo is not None:
+            parts.append(f"{prefix}{column} >= {self.lo}")
+        if self.hi is not None:
+            parts.append(f"{prefix}{column} <= {self.hi}")
+        return " AND " + " AND ".join(parts) if parts else ""
+
+    def month(self, alias: str = "") -> str:
+        """`cube_month_topic`, which keys on the INTEGER `year_month_key`."""
+        prefix = f"{alias}." if alias else ""
+        parts = []
+        if self.lo is not None:
+            parts.append(f"{prefix}year_month_key >= {self.lo // 100}")
+        if self.hi is not None:
+            parts.append(f"{prefix}year_month_key <= {self.hi // 100}")
+        return " AND " + " AND ".join(parts) if parts else ""
+
+    def sector_month(self, alias: str = "") -> str:
+        """`cube_sector_month` carries `year` and `month` separately."""
+        prefix = f"{alias}." if alias else ""
+        ym = f"({prefix}year * 100 + {prefix}month)"
+        parts = []
+        if self.lo is not None:
+            parts.append(f"{ym} >= {self.lo // 100}")
+        if self.hi is not None:
+            parts.append(f"{ym} <= {self.hi // 100}")
+        return " AND " + " AND ".join(parts) if parts else ""
+
+    def topic(self, alias: str = "") -> tuple[str, list[Any]]:
+        """Filter by topic NAME, resolved through `dim_topic`. Returns (sql, params)."""
+        if not self.topics:
+            return "", []
+        prefix = f"{alias}." if alias else ""
+        holes = ", ".join("?" for _ in self.topics)
+        return (
+            f" AND {prefix}topic_key IN "
+            f"(SELECT topic_key FROM dim_topic WHERE topic_name IN ({holes}))",
+            list(self.topics),
+        )
+
+    def sector(self, alias: str = "", column: str = "sector_key") -> tuple[str, list[Any]]:
+        """Filter by sector NAME, resolved through `dim_sector`."""
+        if not self.sectors:
+            return "", []
+        prefix = f"{alias}." if alias else ""
+        holes = ", ".join("?" for _ in self.sectors)
+        return (
+            f" AND {prefix}{column} IN "
+            f"(SELECT sector_key FROM dim_sector WHERE sector_name IN ({holes}))",
+            list(self.sectors),
+        )
+
+    def sector_name(self, alias: str = "", column: str = "sector_name") -> tuple[str, list[Any]]:
+        """Filter a table that stores the sector NAME rather than the key.
+
+        `mining_surprise_days` is one - it was written by the mining stage from
+        joined text, not built from the dimension, so comparing its
+        `sector_name` against `sector_key` would silently match nothing. A
+        filter that returns no rows without erroring is the failure mode worth
+        writing a second method to avoid.
+        """
+        if not self.sectors:
+            return "", []
+        prefix = f"{alias}." if alias else ""
+        holes = ", ".join("?" for _ in self.sectors)
+        return (
+            f" AND {prefix}{column} IN "
+            f"(SELECT sector_name FROM dim_sector WHERE sector_name IN ({holes}))",
+            list(self.sectors),
+        )
+
+    def news_column(self, base: str = "news_count") -> str:
+        """Which news column to read, given the market-report toggle.
+
+        The two tables that split market-report headlines out carry both
+        `news_count` and `news_count_non_market`, so the toggle is a choice of
+        column rather than a predicate. Getting this wrong - leaving one of them
+        hard-coded - is what made the checkbox do nothing at all while still
+        appearing to work.
+        """
+        return base if self.include_market else f"{base}_non_market"
+
+    # `cube_month_topic` has no market-report split: it was built before the
+    # `is_market_report` flag existed, so no column here can honour the toggle.
+    # `note()` says so rather than letting the checkbox imply it did.
+
+    def clause(self, *pieces: tuple[str, list[Any]]) -> tuple[str, list[Any]]:
+        """Join predicates into a complete `WHERE`, or nothing at all.
+
+        Every fragment above returns a leading `AND` so that it can be dropped
+        into an existing predicate. That is convenient until a call site has no
+        `WHERE` yet, where the fragment lands directly after the table name and
+        DuckDB raises a ParserException on a bare `AND`. This assembles them
+        into `WHERE a AND b`, gathering the bound parameters in the same order,
+        so no call site has to remember which of the two shapes it is in.
+
+        Empty fragments are dropped, so a query with no filter still reads
+        exactly as it did before rather than gaining `WHERE TRUE`.
+        """
+        parts: list[str] = []
+        params: list[Any] = []
+        for sql, args in pieces:
+            body = " ".join(sql.split())
+            if not body:
+                continue
+            if body.upper().startswith("AND "):
+                body = body[4:]
+            parts.append(body)
+            params.extend(args)
+        return (" WHERE " + " AND ".join(parts) if parts else ""), params
+
+    # -- reporting --------------------------------------------------------
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "from": f"{self.lo // 10000:04d}-{self.lo // 100 % 100:02d}-{self.lo % 100:02d}" if self.lo else None,
+            "to": f"{self.hi // 10000:04d}-{self.hi // 100 % 100:02d}-{self.hi % 100:02d}" if self.hi else None,
+            "sectors": list(self.sectors),
+            "topics": list(self.topics),
+            "include_market": self.include_market,
+            "count": self.count,
+        }
+
+    def note(self, *, topic_shaped: bool, sector_shaped: bool) -> str:
+        """One sentence saying exactly what the current filter moved.
+
+        Built here rather than in the front end so that the claim and the query
+        that backs it are written in the same place. The awkward case is the one
+        worth being explicit about: with sectors selected, the topic-shaped
+        figures on the page are NOT narrower, and a reader who assumes they are
+        has been told something false by a control they did use.
+        """
+        if not self.active:
+            return "No filter applied. Every figure covers the whole corpus window."
+        bits: list[str] = []
+        if self.lo or self.hi:
+            window = self.as_json()
+            lo, hi = window["from"] or "the start", window["to"] or "the end"
+            bits.append(f"date range {lo} to {hi}")
+        if self.topics:
+            bits.append(f"topics: {', '.join(self.topics)}")
+        if self.sectors:
+            bits.append(f"sectors: {', '.join(self.sectors)}")
+        if self.include_market:
+            bits.append("market-report headlines included")
+
+        head = "Filtered by " + "; ".join(bits) + "."
+        limits: list[str] = []
+        if self.sectors and topic_shaped:
+            limits.append(
+                "headline volume, sentiment and the risk-signal rate are counted "
+                "by TOPIC and are not narrowed by this sector selection - a "
+                "headline has no sector in this warehouse unless it names a "
+                "listed company"
+            )
+        if self.topics and sector_shaped:
+            limits.append(
+                "sector figures are not narrowed by this topic selection - sector "
+                "news volume comes from a different table that carries no topic"
+            )
+        if self.include_market:
+            limits.append(
+                "the market-report toggle applies to the sector and tape figures, "
+                "which carry the split; the topic cubes predate that flag and "
+                "cannot exclude them"
+            )
+        if limits:
+            head += " Not affected: " + "; ".join(limits) + "."
+        return head
+
+
+#: Valid sector and topic names, read once. `dim_sector` and `dim_topic` are
+#: static dimensions that no command rewrites at runtime, so a process-lifetime
+#: cache cannot go stale in a way that matters - and if the warehouse is
+#: rebuilt in place the server is restarted with it.
+_NAMES: dict[str, tuple[str, ...]] = {}
+
+
+def _valid_names(kind: str) -> tuple[str, ...]:
+    if kind not in _NAMES:
+        column, table = ("sector_name", "dim_sector") if kind == "sectors" else ("topic_name", "dim_topic")
+        with reading() as c:
+            rows = c.execute(f"SELECT {column} FROM {table} ORDER BY 1").fetchall()
+        _NAMES[kind] = tuple(str(r[0]) for r in rows)
+    return _NAMES[kind]
+
+
+def _reject_unknown(names: tuple[str, ...], kind: str) -> None:
+    """Refuse a filter value the dimension does not contain.
+
+    Without this, `?sectors=Banknngs` returns an empty treemap, a headline count
+    of zero and a mood computed over no rows - all of which render perfectly,
+    look like a finding, and are entirely an artefact of a typo. A 422 with the
+    valid names is the only honest answer.
+    """
+    if not names:
+        return
+    known = _valid_names(kind)
+    unknown = [n for n in names if n not in known]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown {kind}: {', '.join(repr(u) for u in unknown)}. "
+                f"Valid {kind} are: {', '.join(known)}."
+            ),
+        )
+
+
+def scope_params(
+    date_from: str | None = Query(None, alias="from"),
+    date_to: str | None = Query(None, alias="to"),
+    sectors: str = Query(""),
+    topics: str = Query(""),
+    include_market: int = Query(0, ge=0, le=1),
+) -> Scope:
+    """The filter, as a FastAPI dependency.
+
+    Declaring it here rather than repeating four parameters on every signature
+    is what stops the endpoint set from drifting apart again - the reason the
+    filter bar did nothing was that four endpoints each forgot to declare them.
+    """
+    scope = Scope(
+        lo=_date_int(date_from, "from"),
+        hi=_date_int(date_to, "to"),
+        sectors=_csv(sectors),
+        topics=_csv(topics),
+        include_market=bool(include_market),
+    )
+    _reject_unknown(scope.sectors, "sectors")
+    _reject_unknown(scope.topics, "topics")
+    if scope.lo and scope.hi and scope.lo > scope.hi:
+        raise HTTPException(
+            status_code=422,
+            detail=f"from={date_from} is after to={date_to}; there is no window between them.",
+        )
+    return scope
 
 
 def _not_built(table: str, command: str) -> JSONResponse:
@@ -1438,12 +1770,18 @@ def cube_headlines(
 
 
 @router.get("/ui/home")
-def home() -> JSONResponse:
-    """Cached wrapper. The work is in `_build_home`."""
-    return _cached_envelope("/ui/home", _build_home)
+def home(scope: Scope = Depends(scope_params)) -> JSONResponse:
+    """Cached wrapper. The work is in `_build_home`.
+
+    The cache key carries the filter, because a cached unfiltered dashboard
+    served to a reader who has narrowed to one sector is the exact failure this
+    endpoint started with - the numbers simply did not move.
+    """
+    key = "/ui/home" + ("?" + json.dumps(scope.as_json(), sort_keys=True) if scope.active else "")
+    return _cached_envelope(key, lambda: _build_home(scope))
 
 
-def _build_home() -> JSONResponse:
+def _build_home(scope: Scope) -> JSONResponse:
     """Everything the homepage needs, in one response.
 
     The contract's rule is that this must be served from cubes and mining
@@ -1458,19 +1796,49 @@ def _build_home() -> JSONResponse:
         q = _Queries(c)
         start, end = _window()
 
+        # The filter's topic and sector predicates, assembled per table through
+        # `clause`, which yields a complete WHERE (or nothing). Doing it this
+        # way rather than by dropping bare `AND`s into each query is what stops
+        # a table with no existing WHERE from failing to parse the moment a
+        # filter arrives.
+        month_topic_where, month_topic_args = scope.clause(
+            (scope.month("m"), []), scope.topic("m")
+        )
+        day_topic_where, day_topic_args = scope.clause(
+            (scope.day("c"), []), scope.topic("c")
+        )
+        sector_day_where, sector_day_args = scope.clause(
+            (scope.day("f"), []), scope.sector("f", "sector_key")
+        )
+        surprise_where, surprise_args = scope.clause(
+            (scope.day("m"), []), scope.sector("m")
+        )
+        sector_month_where, sector_month_args = scope.clause(
+            (scope.sector_month("c"), []), scope.sector("c")
+        )
+        # The treemap's outer query has a WHERE of its own shape (joins plus a
+        # literal TRUE anchor), so it takes the bare fragments and the
+        # parameters directly rather than the assembled clause.
+        outer_sector_sql, outer_sector_args = scope.sector("c")
+
         # --- KPIs, each with the monthly series that draws its sparkline -----
         # Headlines in window, by month, from the v1 cube rather than the
         # 3.15M-row fact: cube_month_topic already holds it per topic.
         monthly_news = q.rows(
-            """
+            f"""
             SELECT year_month, sum(headline_count) AS headlines
-            FROM cube_month_topic GROUP BY 1 ORDER BY 1
-            """
+            FROM cube_month_topic m{month_topic_where}
+            GROUP BY 1 ORDER BY 1
+            """,
+            month_topic_args,
         )
         news_total = sum(int(r["headlines"]) for r in monthly_news)
 
+        # Trading sessions inside the filter. Outside it this is the whole
+        # calendar; a reader who asked for four months should not be told there
+        # were 1,235 sessions.
         sessions = q.scalar(
-            "SELECT count(*) FROM dim_trading_calendar WHERE is_trading_day"
+            f"SELECT count(*) FROM dim_trading_calendar t WHERE t.is_trading_day{scope.day('t')}"
         )
 
         # Nifty over the window, clipped to the news window on purpose: the
@@ -1482,11 +1850,11 @@ def _build_home() -> JSONResponse:
         # date column. Getting that wrong is a BinderException, not a null, so
         # it cannot be discovered by inspecting a response.
         nifty = q.rows(
-            """
+            f"""
             SELECT trade_date, close, return_pct
             FROM fact_market_daily
             WHERE trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-              AND close IS NOT NULL
+              AND close IS NOT NULL{scope.day("")}
             ORDER BY trade_date
             """,
             [start, end],
@@ -1515,14 +1883,18 @@ def _build_home() -> JSONResponse:
         # `risk_signal_count` and `headline_count` per day and topic, so the
         # ratio is the same number for a hundredth of the work.
         risk = q.one(
-            """
+            f"""
             SELECT round(100.0 * sum(risk_signal_count)
                          / nullif(sum(headline_count), 0), 2) AS pct
-            FROM cube_day_topic
-            """
+            FROM cube_day_topic c{day_topic_where}
+            """,
+            day_topic_args,
         )
         surprise_count = (
-            q.scalar("SELECT count(*) FROM mining_surprise_days")
+            q.scalar(
+                f"SELECT count(*) FROM mining_surprise_days m{surprise_where}",
+                surprise_args,
+            )
             if _has("mining_surprise_days")
             else None
         )
@@ -1537,7 +1909,7 @@ def _build_home() -> JSONResponse:
         # `sum_sentiment_compound` and is divided here, which is rule 16 and
         # also the only way the months stay comparable.
         main = q.rows(
-            """
+            f"""
             WITH news AS (
                 SELECT year_month,
                        sum(headline_count) AS headlines,
@@ -1545,7 +1917,7 @@ def _build_home() -> JSONResponse:
                              / nullif(sum(headline_count), 0), 4) AS sentiment,
                        round(100.0 * sum(sensational_count)
                              / nullif(sum(headline_count), 0), 3) AS sensational
-                FROM cube_month_topic
+                FROM cube_month_topic m{month_topic_where}
                 GROUP BY 1
             ),
             px AS (
@@ -1553,14 +1925,14 @@ def _build_home() -> JSONResponse:
                        round(avg(close), 2) AS nifty
                 FROM fact_market_daily
                 WHERE trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                  AND close IS NOT NULL
+                  AND close IS NOT NULL{scope.day("")}
                 GROUP BY 1
             )
             SELECT n.year_month AS date, n.headlines, n.sentiment, n.sensational, p.nifty
             FROM news n LEFT JOIN px p ON p.ym = n.year_month
             ORDER BY 1
             """,
-            [start, end],
+            month_topic_args + [start, end],
         )
 
         # --- market mood: recent news heat against its own history ---
@@ -1573,10 +1945,11 @@ def _build_home() -> JSONResponse:
         # answer "how busy is it NOW, for this corpus", so `recent` is a window
         # and the comparison is a rank in a distribution.
         mood = q.one(
-            """
+            f"""
             WITH daily AS (
-                SELECT date_key, sum(news_count_non_market) AS news
-                FROM fact_news_sector_daily GROUP BY 1
+                SELECT f.date_key, sum(f.{scope.news_column()}) AS news
+                FROM fact_news_sector_daily f{sector_day_where}
+                GROUP BY 1
             ),
             recent AS (
                 SELECT avg(news) AS level FROM (
@@ -1588,7 +1961,8 @@ def _build_home() -> JSONResponse:
                          / nullif(count(*), 0), 1) AS percentile,
                    (SELECT level FROM recent) AS recent_level
             FROM daily d
-            """
+            """,
+            sector_day_args,
         )
 
         # Aliased to the names `EventMark` declares in web-scaffold/src/types.ts.
@@ -1609,23 +1983,23 @@ def _build_home() -> JSONResponse:
         # same shape as the z in mining_surprise_days, and the treemap's tooltip
         # says so rather than presenting it as a market-wide measure.
         sector_heat = q.rows(
-            """
+            f"""
             WITH per_sector AS (
-                SELECT sector_key, news_count,
-                       avg(news_count) OVER (
-                         PARTITION BY sector_key ORDER BY year, month
+                SELECT c.sector_key, c.{scope.news_column()},
+                       avg(c.{scope.news_column()}) OVER (
+                         PARTITION BY c.sector_key ORDER BY c.year, c.month
                          ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
                        ) AS rolling_mean,
-                       stddev_samp(news_count) OVER (
-                         PARTITION BY sector_key ORDER BY year, month
+                       stddev_samp(c.{scope.news_column()}) OVER (
+                         PARTITION BY c.sector_key ORDER BY c.year, c.month
                          ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
                        ) AS rolling_sd
-                FROM cube_sector_month
+                FROM cube_sector_month c{sector_month_where}
             ),
             agg AS (
                 SELECT sector_key,
-                       sum(news_count) AS total_news,
-                       round(avg(news_count - rolling_mean)
+                       sum({scope.news_column()}) AS total_news,
+                       round(avg({scope.news_column()} - rolling_mean)
                              / nullif(avg(rolling_sd), 0), 2) AS heat_z
                 FROM per_sector GROUP BY sector_key
             )
@@ -1636,18 +2010,25 @@ def _build_home() -> JSONResponse:
             FROM cube_sector_month c
             JOIN dim_sector s ON s.sector_key = c.sector_key
             JOIN agg a ON a.sector_key = c.sector_key
+            WHERE TRUE{scope.sector_month("c")}{outer_sector_sql}
             GROUP BY 1, 2, 3
             ORDER BY news_count DESC
-            """
+            """,
+            # The CTE's predicates come first in the statement text, so their
+            # placeholders bind before the outer query's. Passing only the
+            # outer list leaves the CTE's unbound, and DuckDB reports that as
+            # "values were not provided for parameters" rather than guessing.
+            sector_month_args + outer_sector_args,
         )
         surprise = []
         if _has("mining_surprise_days"):
             surprise = q.rows(
-                """
+                f"""
                 SELECT sector_name AS sector, session, kind, news_heat_z, abs_return_z, avg_return
-                FROM mining_surprise_days
+                FROM mining_surprise_days m{surprise_where}
                 ORDER BY abs_return_z DESC LIMIT 5
-                """
+                """,
+                surprise_args,
             )
 
     from dwm.inference.insights import build
@@ -1674,25 +2055,45 @@ def _build_home() -> JSONResponse:
     # One sparkline series per KPI, monthly, so the card can draw it without a
     # second request. Every KPI therefore reports over the SAME months.
     spark = [float(r["headlines"]) for r in monthly_news]
+
+    # Which filter dimensions each figure actually moved. Declared per KPI
+    # rather than left to the reader to guess: "Stocks tracked" is 47 whatever
+    # you select, and a number that ignores a control sitting right above it
+    # reads as though the control is broken. The card says so instead.
+    def _responds(*dimensions: str) -> list[str]:
+        return list(dimensions)
+
     data = {
         "devSample": False,
         "window": {"start": start, "end": end},
+        "scope": {
+            "applied": scope.as_json(),
+            "note": scope.note(topic_shaped=True, sector_shaped=True),
+        },
         "kpis": [
             {"id": "headlines", "label": "Headlines analysed", "value": news_total,
-             "spark": spark, "href": "/explore"},
+             "spark": spark, "href": "/explore",
+             "respondsTo": _responds("date", "topic")},
             {"id": "stocks", "label": "Stocks tracked", "value": stocks_tracked,
-             "spark": [], "href": "/stocks"},
+             "spark": [], "href": "/stocks",
+             "respondsTo": _responds(),
+             "unfilteredBecause": "a count of the companies in dim_stock, not a measure of anything"},
             {"id": "sessions", "label": "Trading sessions", "value": sessions,
-             "spark": [], "href": "/data"},
+             "spark": [], "href": "/data",
+             "respondsTo": _responds("date")},
             {"id": "nifty", "label": "Nifty over the window",
              "value": round(nifty_change, 2) if nifty_change is not None else 0,
              "decimals": 2, "unit": "%", "spark": [float(r["close"]) for r in nifty[-60:]],
-             "href": "/events"},
+             "href": "/events",
+             "respondsTo": _responds("date"),
+             "unfilteredBecause": "the index is one series; sectors and topics are news attributes"},
             {"id": "risk", "label": "Risk-signal rate",
              "value": risk["pct"] if risk and risk["pct"] is not None else 0,
-             "decimals": 2, "unit": "%", "spark": [], "href": "/headline"},
+             "decimals": 2, "unit": "%", "spark": [], "href": "/headline",
+             "respondsTo": _responds("date", "topic")},
             {"id": "surprise", "label": "Surprise days found", "value": surprise_count or 0,
-             "spark": [], "href": "/mining"},
+             "spark": [], "href": "/mining",
+             "respondsTo": _responds("date", "sector")},
         ],
         "mood": {
             "score": _mood_pct,
@@ -1702,6 +2103,16 @@ def _build_home() -> JSONResponse:
             "label": _mood_label(_mood_pct),
             "percentile": _mood_pct,
             "recent_level": round(float(mood["recent_level"] or 0), 1) if mood else None,
+            # A percentile is only meaningful against the distribution it was
+            # ranked in. Narrow the window and the same busy fortnight becomes
+            # the 92nd percentile of a quiet quarter, so when a filter is on the
+            # caption has to say what it is being compared against.
+            "comparedWith": (
+                f"the {scope.as_json()['from'] or start} to {scope.as_json()['to'] or end} window, "
+                "not the whole corpus"
+                if (scope.lo or scope.hi or scope.sectors)
+                else "the whole corpus window"
+            ),
         },
         "main": main,
         "events": events,
@@ -1719,6 +2130,15 @@ def _build_home() -> JSONResponse:
             f"{outliers or 0} outlier rows kept but excluded from statistics. "
             f"Nifty is clipped to the news window ({start} to {end}); the index "
             f"series itself runs later. The risk-signal rate is a rate on "
+            f"unlabelled headlines and is not a fake-news rate. Event markers "
+            f"and the insight cards are whole-corpus and are NOT narrowed by "
+            f"the filter - they are facts about the corpus, not about a slice."
+            if scope.active
+            else
+            f"Served from cubes and mining tables. {sectors} sectors, "
+            f"{outliers or 0} outlier rows kept but excluded from statistics. "
+            f"Nifty is clipped to the news window ({start} to {end}); the index "
+            f"series itself runs later. The risk-signal rate is a rate on "
             f"unlabelled headlines and is not a fake-news rate."
         ),
     )
@@ -1730,7 +2150,7 @@ def _build_home() -> JSONResponse:
 
 
 @router.get("/ui/tape")
-def tape() -> JSONResponse:
+def tape(scope: Scope = Depends(scope_params)) -> JSONResponse:
     """Latest sector moves for the ticker tape.
 
     The last five trading sessions in the window, per sector, so the tape moves
@@ -1741,6 +2161,11 @@ def tape() -> JSONResponse:
         return _not_built("fact_news_sector_daily", "python -m dwm link")
     with reading() as c:
         q = _Queries(c)
+        # The tape is sector-shaped and price-shaped, so it answers a sector
+        # selection and a date range. It has no topic to filter on: it is built
+        # from `fact_stock_daily`, which carries returns, not headlines.
+        sessions_where, sessions_args = scope.clause((scope.day("f"), []))
+        sec_sql, sec_args = scope.sector("sec")
         # Returns come from `fact_stock_daily`, not `fact_news_sector_daily` -
         # the latter holds news columns only (`news_count`, `sum_sentiment`,
         # `high_sensational_count`) and has no `sum_return`. Assuming otherwise
@@ -1755,9 +2180,9 @@ def tape() -> JSONResponse:
         # daily delta). Returning the day's change in both fields made the tape
         # print every number twice.
         rows = q.rows(
-            """
+            f"""
             WITH sessions AS (
-                SELECT max(trade_date) AS latest FROM fact_stock_daily
+                SELECT max(trade_date) AS latest FROM fact_stock_daily f{sessions_where}
             )
             SELECT sec.sector_name AS sector,
                    round(avg(f.return_pct), 3) AS window_pct,
@@ -1766,9 +2191,10 @@ def tape() -> JSONResponse:
             FROM fact_stock_daily f
             JOIN dim_stock st ON st.stock_key = f.stock_key
             JOIN dim_sector sec ON sec.sector_key = st.sector_key
-            WHERE NOT f.is_outlier AND f.return_pct IS NOT NULL
+            WHERE NOT f.is_outlier AND f.return_pct IS NOT NULL{scope.day('f')}{sec_sql}
             GROUP BY 1 ORDER BY abs(window_pct) DESC NULLS LAST
-            """
+            """,
+            sessions_args + sec_args,
         )
     items = [
         {
@@ -1787,7 +2213,8 @@ def tape() -> JSONResponse:
             "Two figures per sector: `value` is the mean daily return across the "
             "whole window and `change` is the last trading session, both in "
             "percentage points and both excluding outlier rows. Neither is a "
-            "price - a sector has no price."
+            "price - a sector has no price. "
+            + scope.note(topic_shaped=False, sector_shaped=True)
         ),
     )
 
@@ -1796,6 +2223,7 @@ def tape() -> JSONResponse:
 def main_series(
     grain: str = Query(default="month", pattern="^(week|month)$"),
     metric: str = Query(default="heat", pattern="^(heat|sentiment|sensational)$"),
+    scope: Scope = Depends(scope_params),
 ) -> JSONResponse:
     """News against the Nifty at weekly or monthly grain."""
     started = time.perf_counter()
@@ -1809,6 +2237,7 @@ def main_series(
     with reading() as c:
         q = _Queries(c)
         start, end = _window()
+        topic_where, topic_args = scope.clause((scope.month("m"), []), scope.topic("m"))
         # Only monthly is served. `cube_month_topic` is the finest cube that
         # carries both news and price at the same grain, and returning monthly
         # points under `grain=week` would be a mislabelled series - the Time
@@ -1831,7 +2260,7 @@ def main_series(
             f"""
             WITH news AS (
                 SELECT year_month AS ym, {column} AS value
-                FROM cube_month_topic
+                FROM cube_month_topic m{topic_where}
                 GROUP BY 1
             ),
             px AS (
@@ -1839,14 +2268,14 @@ def main_series(
                        round(avg(close), 2) AS nifty
                 FROM fact_market_daily
                 WHERE trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                  AND close IS NOT NULL
+                  AND close IS NOT NULL{scope.day('')}
                 GROUP BY 1
             )
             SELECT n.ym AS date, n.value, p.nifty
             FROM news n LEFT JOIN px p ON p.ym = n.ym
             ORDER BY 1
             """,
-            [start, end],
+            topic_args + [start, end],
         )
     return envelope(
         "OLAP cube",
@@ -1919,7 +2348,10 @@ def day_panel(day: str) -> JSONResponse:
 
 
 @router.get("/ui/calendar")
-def calendar(metric: str = Query(default="heat", pattern="^(heat|sentiment|sensational)$")) -> JSONResponse:
+def calendar(
+    metric: str = Query(default="heat", pattern="^(heat|sentiment|sensational)$"),
+    scope: Scope = Depends(scope_params),
+) -> JSONResponse:
     """Per-day values for the calendar heatmap."""
     started = time.perf_counter()
     if not _has("cube_day_topic"):
@@ -1932,6 +2364,10 @@ def calendar(metric: str = Query(default="heat", pattern="^(heat|sentiment|sensa
     with reading() as c:
         q = _Queries(c)
         start, end = _window()
+        # The calendar is daily x topic, so it answers a date range and a topic
+        # selection and ignores a sector one - for the same reason as every
+        # other topic-grain figure: a headline has no sector here.
+        topic_sql, topic_args = scope.topic("c")
         # `cube_day_topic` is keyed on the INTEGER surrogate `date_key`
         # (20150908), not on a date string. Casting through dim_date is what
         # turns it back into something a calendar axis can read, and joining
@@ -1947,9 +2383,10 @@ def calendar(metric: str = Query(default="heat", pattern="^(heat|sentiment|sensa
             FROM cube_day_topic c
             JOIN dim_date d ON d.date_key = c.date_key
             WHERE d.full_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+              AND TRUE{scope.day('c')}{topic_sql}
             GROUP BY 1, 3, 4 ORDER BY 1
             """,
-            [start, end],
+            [start, end] + topic_args,
         )
     if len(rows) > 2500:
         rows = rows[-2500:]
@@ -1961,7 +2398,8 @@ def calendar(metric: str = Query(default="heat", pattern="^(heat|sentiment|sensa
         note=(
             "One row per in-window day from the daily cube. is_trading_day is "
             "carried so the front end can distinguish a quiet trading day from a "
-            "market holiday - a great many headlines fall on the latter."
+            "market holiday - a great many headlines fall on the latter. "
+            + scope.note(topic_shaped=True, sector_shaped=False)
         ),
     )
 

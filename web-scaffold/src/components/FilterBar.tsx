@@ -19,7 +19,12 @@ export function FilterBar() {
   const sectors = useMemo(() => (data?.data ?? []).map((s) => s.sector_name), [data])
 
   return (
-    <div className="glass px-4 py-3 mb-4 sticky top-0 z-20 flex flex-wrap items-end gap-3">
+    /* `items-start`, not `items-end`: every field here is a label stacked over a
+       control, so they are ragged at the bottom by design and bottom-aligning
+       them put the sector pills level with the date inputs' baseline and the
+       Reset button level with neither. The trailing group carries `mt-auto`
+       instead, which keeps Reset on the control line whatever wraps. */
+    <div className="glass px-4 py-3 mb-4 sticky top-0 z-20 flex flex-wrap items-start gap-x-4 gap-y-3">
       <label className="field">
         <span className="field__label">From</span>
         <input
@@ -39,19 +44,21 @@ export function FilterBar() {
         />
       </label>
 
-      <div className="field" style={{ minWidth: 260 }}>
+      {/* `basis-72` so the sector list wraps as one block instead of stranding
+          a single pill on the next line; the pills inside wrap freely. */}
+      <div className="field basis-72 grow">
         <span className="field__label">Sectors</span>
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-1.5">
           {sectors.map((s) => (
             <button
               key={s}
               className="pill"
               aria-pressed={filters.sectors.includes(s)}
-              style={{
-                cursor: 'pointer',
-                borderColor: filters.sectors.includes(s) ? 'var(--news)' : undefined,
-                color: filters.sectors.includes(s) ? 'var(--news)' : undefined,
-              }}
+              style={
+                filters.sectors.includes(s)
+                  ? { borderColor: 'var(--news)', color: 'var(--news)', background: 'rgba(20,184,166,.10)' }
+                  : undefined
+              }
               onClick={() => toggleSector(s)}
             >
               {s}
@@ -62,21 +69,21 @@ export function FilterBar() {
 
       <label className="field">
         <span className="field__label">Market-report headlines</span>
-        <div className="flex items-center gap-2" style={{ minHeight: 30 }}>
+        <div className="flex items-center gap-2 min-h-8">
           <input
             type="checkbox"
             checked={filters.includeMarketReports}
             onChange={(e) => set({ includeMarketReports: e.target.checked })}
           />
-          <span className="text-xs" style={{ color: 'var(--muted)' }}>
+          <span className="text-xs leading-snug" style={{ color: 'var(--muted)' }}>
             off by default — they describe a move that already happened
           </span>
         </div>
       </label>
 
-      <div className="ml-auto flex items-center gap-3">
+      <div className="ml-auto flex items-center gap-2 mt-auto">
         {activeCount > 0 && (
-          <span className="pill" style={{ borderColor: 'var(--news)' }}>
+          <span className="pill" style={{ borderColor: 'var(--news)', color: 'var(--news)' }}>
             {activeCount} filter{activeCount === 1 ? '' : 's'} active
           </span>
         )}

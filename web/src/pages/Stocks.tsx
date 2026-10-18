@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
+import { useSafeBack } from '../hooks/useSafeBack'
 import { AlertTriangle, ArrowLeft, Layers, TrendingDown, TrendingUp } from 'lucide-react'
 import { useApi } from '../lib/api'
 import { fmtNum } from '../lib/format'
@@ -287,7 +288,9 @@ function shortAxis(label: string): string {
 
 export default function Stocks() {
   const { symbol } = useParams<{ symbol: string }>()
-  const navigate = useNavigate()
+  // `navigate(-1)` alone leaves the app entirely when the page was opened
+  // from a shared link rather than from inside it.
+  const goBack = useSafeBack('/')
   const [rebase, setRebase] = useState(false)
 
   const sym = (symbol ?? 'RELIANCE').toUpperCase()
@@ -310,7 +313,7 @@ export default function Stocks() {
     <div className="flex flex-col gap-4">
       {/* ------------------------------------------------ header ----------- */}
       <header className="glass p-4">
-        <button type="button" className="btn mb-3" onClick={() => navigate(-1)}>
+        <button type="button" className="btn mb-3" onClick={goBack}>
           <ArrowLeft size={13} /> Back
         </button>
         {stock.isLoading && <div className="skeleton h-24 rounded-xl" />}

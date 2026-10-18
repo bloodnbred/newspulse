@@ -30,7 +30,24 @@ export interface Filters {
   includeMarketReports: boolean;
 }
 
-export interface Kpi { id: string; label: string; value: number; decimals?: number; unit?: string; deltaPct?: number; spark: number[]; href?: string }
+/** Which filter dimensions a figure actually moved: 'date' | 'topic' | 'sector'.
+ *
+ *  Declared per KPI rather than left to the reader. "Stocks tracked" is 47
+ *  whatever you select, and a number that ignores the control sitting right
+ *  above it reads as a broken control - so the card says what it responds to
+ *  instead of silently ignoring a filter the reader just used. */
+export interface Kpi {
+  id: string;
+  label: string;
+  value: number;
+  decimals?: number;
+  unit?: string;
+  deltaPct?: number;
+  spark: number[];
+  href?: string;
+  respondsTo?: string[];
+  unfilteredBecause?: string;
+}
 export interface TapeItem { label: string; value: string; change: number }
 export interface SeriesPoint { date: string; newsHeat: number; nifty: number }
 export interface EventMark { date: string; label: string; type: string }
@@ -552,9 +569,30 @@ export interface InsightsPayload {
 export interface HomeSummary {
   devSample: boolean;
   window: { start: string; end: string };
+  /** What the global filter narrowed, and - more importantly - what it could
+   *  not. The note is written by the server next to the queries that back it,
+   *  so the claim and the SQL are written in the same place. */
+  scope: {
+    applied: {
+      from: string | null;
+      to: string | null;
+      sectors: string[];
+      topics: string[];
+      include_market: boolean;
+      count: number;
+    };
+    note: string;
+  };
   kpis: Kpi[];
-  mood: { score: number; label: string; percentile: number };
-  main: SeriesPoint[];
+  mood: {
+    score: number;
+    label: string;
+    percentile: number;
+    recent_level?: number | null;
+    /** A percentile means nothing without the distribution it was ranked in. */
+    comparedWith?: string;
+  };
+  main: SeriesPointFull[];
   events: EventMark[];
   sectorHeat: SectorHeat[];
   surprise: SurpriseDay[];

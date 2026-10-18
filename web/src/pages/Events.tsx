@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useSafeBack } from '../hooks/useSafeBack'
 import { AlertTriangle, ArrowLeft, Columns2, Layers } from 'lucide-react'
 import { useApi } from '../lib/api'
 import { fmtNum } from '../lib/format'
@@ -263,6 +264,9 @@ function NewsAround({ rows, eventDate }: { rows: EventDetail['news_around']; eve
 export default function Events() {
   const { eventKey } = useParams<{ eventKey?: string }>()
   const navigate = useNavigate()
+  // `navigate(-1)` alone leaves the app entirely when the page was opened
+  // from a shared link rather than from inside it.
+  const goBack = useSafeBack('/')
   const [selected, setSelected] = useState<number | null>(eventKey ? Number(eventKey) : null)
   const [compareWith, setCompareWith] = useState<number | null>(null)
   const [sortDesc, setSortDesc] = useState(true)
@@ -299,7 +303,7 @@ export default function Events() {
   return (
     <div className="flex flex-col gap-4">
       <header className="glass p-4">
-        <button type="button" className="btn mb-3" onClick={() => navigate(-1)}>
+        <button type="button" className="btn mb-3" onClick={goBack}>
           <ArrowLeft size={13} /> Back
         </button>
         <h1 className="text-lg font-semibold">Event Lab</h1>

@@ -1,7 +1,7 @@
 import { Suspense, lazy } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
-import Placeholder from './pages/Placeholder'
+import NotFound from './pages/NotFound'
 
 /** Home is eager: it is the landing page and the first-paint budget is spent
  *  here, so splitting it would trade the metric that matters for one that does
@@ -50,9 +50,12 @@ export default function App() {
         <Route path="headline" element={<Suspense fallback={<PageFallback />}><Headline /></Suspense>} />
         <Route path="data" element={<Suspense fallback={<PageFallback />}><Data /></Suspense>} />
         <Route path="insights" element={<Suspense fallback={<PageFallback />}><Insights /></Suspense>} />
+        {/* Anything else. Without this the shell renders around an empty outlet
+            and a bad link looks exactly like a page that has not loaded yet. */}
+        <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
   )
 }
 
-export { Placeholder, PageFallback }
+export { PageFallback }
