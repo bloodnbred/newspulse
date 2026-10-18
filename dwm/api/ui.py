@@ -35,6 +35,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import duckdb
@@ -750,6 +751,478 @@ def event_detail(event_key: int, include_market: int = Query(0, ge=0, le=1)) -> 
             "of each other cannot be separated in a five-day window - the page "
             "warns when that is the case. Stocks in `excluded` had too little "
             "pre-event history to fit a model and are kept out of every average."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mining Lab and Headline Lab
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ui/mining/clusters")
+def mining_clusters() -> JSONResponse:
+    """The PCA scatter, plus a profile card per cluster.
+
+    **The cluster names are derived, not given.** `mining_stock_clusters` has
+    numeric ids and no labels, so a page that prints "Cluster 2" makes the
+    reader do the work of working out what it means. The name comes from the
+    cluster's own medians - how volatile, how market-linked, how much the news
+    moves it - so it describes the members and can be wrong in the way a
+    measurement can be wrong, rather than being a name someone chose.
+    """
+    started = time.perf_counter()
+    if not _has("mining_stock_clusters"):
+        return _not_built("mining_stock_clusters", "python -m dwm mine --op stockclusters")
+    cluster_run = _mining_report().get("rq4_clusters") or {}
+    with reading() as c:
+        q = _Queries(c)
+        points = q.rows(
+            """
+            SELECT symbol, sector_name AS sector, cluster_id,
+                   round(ann_volatility, 3) AS ann_volatility,
+                   round(beta, 4) AS beta, round(max_drawdown, 4) AS max_drawdown,
+                   round(mentions_per_1000_days, 2) AS mentions_per_1000_days,
+                   round(mention_sentiment, 4) AS mention_sentiment,
+                   round(news_sensitivity, 4) AS news_sensitivity,
+                   round(pc1, 4) AS pc1, round(pc2, 4) AS pc2,
+                   n_sessions
+            FROM mining_stock_clusters
+            ORDER BY symbol
+            """
+        )
+        profiles = q.rows(
+            """
+            SELECT cluster_id,
+                   count(*) AS n_stocks,
+                   round(median(ann_volatility), 2) AS median_volatility,
+                   round(median(beta), 3) AS median_beta,
+                   round(median(max_drawdown), 3) AS median_drawdown,
+                   round(median(mentions_per_1000_days), 1) AS median_mentions,
+                   round(median(mention_sentiment), 4) AS median_sentiment,
+                   round(median(news_sensitivity), 4) AS median_news_sensitivity,
+                   string_agg(DISTINCT sector_name, ', ') AS sectors
+            FROM mining_stock_clusters
+            WHERE cluster_id IS NOT NULL
+            GROUP BY 1 ORDER BY 1
+            """
+        )
+
+    # Name each cluster by its RANK on the two axes that carry the meaning.
+    #
+    # Two earlier attempts failed the same way. Thresholding called both of the
+    # volatile clusters "high-beta movers" - they clear the same cut, so the
+    # page showed two identical names over two visibly different groups. Giving
+    # the four quadrants four names then failed too, because three clusters
+    # cannot occupy four quadrants distinctly.
+    #
+    # A rank pair is always distinct: "most volatile · mid market-linked" is not
+    # the same string as "least volatile · least market-linked", whatever the
+    # count. And it describes rather than judges - it says where the cluster sits
+    # among its peers, which is checkable, instead of claiming a character.
+    by_vol = sorted(profiles, key=lambda p: p["median_volatility"] or 0)
+    by_beta = sorted(profiles, key=lambda p: p["median_beta"] or 0)
+    beta_rank = {id(p): i for i, p in enumerate(by_beta)}
+    n = len(profiles)
+
+    def rank_term(rank: int, high: str, mid: str, low: str) -> str:
+        if n == 1:
+            return mid
+        if rank == n - 1:
+            return high
+        if rank == 0:
+            return low
+        return mid
+
+    for profile in profiles:
+        vol_rank = by_vol.index(profile)
+        profile["name"] = " · ".join(
+            (
+                rank_term(vol_rank, "most volatile", "mid volatility", "least volatile"),
+                rank_term(
+                    beta_rank[id(profile)],
+                    "most market-linked",
+                    "mid market-linked",
+                    "least market-linked",
+                ),
+            )
+        )
+        profile["auto_named"] = True
+        profile["most_volatile"] = vol_rank == n - 1
+        profile["least_volatile"] = vol_rank == 0
+        profile["most_market_linked"] = beta_rank[id(profile)] == n - 1
+
+    return envelope(
+        "Cluster analysis",
+        {
+            "points": points,
+            "profiles": profiles,
+            # The silhouette and, more importantly, its shape: 0.2582 is a
+            # decent-looking number until you know one cluster holds 94.9% of the
+            # sample, at which point the score describes a small well-separated
+            # minority rather than a well-clustered corpus. Both travel together.
+            "silhouette": _round(cluster_run.get("silhouette")),
+            "silhouette_is_strong": cluster_run.get("silhouette_is_strong"),
+            "dominant_cluster_share": _round(cluster_run.get("dominant_cluster_share"), 4),
+            "concentration_note": cluster_run.get("concentration_note"),
+            "chosen_k": cluster_run.get("chosen_k"),
+            "k_note": cluster_run.get("k_note"),
+            "cluster_note": cluster_run.get("note"),
+        },
+        q,
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "Cluster names are computed from each cluster's medians and are this "
+            "response's, not the project's. The clustering groups stocks by trading "
+            "behaviour - volatility, beta, drawdown, how strongly returns follow "
+            "their own news - so two companies in one cluster may have nothing to "
+            "do with each other's businesses."
+        ),
+    )
+
+
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    mid = len(values) // 2
+    if len(values) % 2:
+        return values[mid]
+    return (values[mid - 1] + values[mid]) / 2
+
+
+def _reports_path() -> Path:
+    """The reports directory, located from the package rather than the cwd.
+
+    The API is started from the repo root by `python -m dwm serve` but can be
+    started from anywhere, and a path that resolves relative to the working
+    directory makes a report silently missing on another machine.
+    """
+    from dwm.api.store import reports_dir
+
+    return reports_dir()
+
+
+#: Read once per process. `mining.json` is 600KB and four endpoints read it; a
+#: file read per request would be the slowest thing in an otherwise fast page.
+_MINING_REPORT: dict[str, Any] | None = None
+
+
+def _mining_report() -> dict[str, Any]:
+    """`reports/mining.json`, or `{}` if it is absent or unreadable.
+
+    Mining results live in the warehouse where they are tables the dashboard
+    queries, and in `mining.json` where they are things with no natural table -
+    a confusion matrix, a silhouette with its shape, per-class precision. Both
+    are the project's own output; neither is invented here.
+
+    A missing report degrades to an empty dict so the endpoint still serves the
+    half that does come from SQL, rather than 500-ing a page because one
+    artefact is missing.
+    """
+    global _MINING_REPORT
+    if _MINING_REPORT is None:
+        path = _reports_path() / "mining.json"
+        try:
+            _MINING_REPORT = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            log.warning("mining.json unavailable (%s); mining pages lose its halves", exc)
+            _MINING_REPORT = {}
+    return _MINING_REPORT
+
+
+@router.get("/ui/mining/rules")
+def mining_rules(
+    min_support: float = Query(0.0, ge=0.0, le=1.0),
+    min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+    min_lift: float = Query(1.0, ge=0.0),
+) -> JSONResponse:
+    """Association rules over market regimes, filtered in SQL.
+
+    Lift is the filter that matters and it is not optional in practice: a rule
+    with support 0.04 and confidence 0.55 can be entirely ordinary once you
+    know its consequent is common. Lift above 1 is the only one of the three
+    that says "these co-occur more than chance would predict".
+    """
+    started = time.perf_counter()
+    if not _has("mining_market_rules"):
+        return _not_built("mining_market_rules", "python -m dwm mine --op marketrules")
+    with reading() as c:
+        q = _Queries(c)
+        rows = q.rows(
+            """
+            SELECT rule_id, sector_name, antecedents, consequents,
+                   round(support, 5) AS support, round(confidence, 5) AS confidence,
+                   round(lift, 4) AS lift, support_count, n_transactions
+            FROM mining_market_rules
+            WHERE support >= ? AND confidence >= ? AND lift >= ?
+            ORDER BY lift DESC, support DESC
+            LIMIT 200
+            """,
+            [min_support, min_confidence, min_lift],
+        )
+        total = q.scalar("SELECT count(*) FROM mining_market_rules") or 0
+
+    return envelope(
+        "Association rule mining",
+        {
+            "rules": rows,
+            "matched": len(rows),
+            "total": int(total),
+            "thresholds": {
+                "min_support": min_support,
+                "min_confidence": min_confidence,
+                "min_lift": min_lift,
+            },
+        },
+        q,
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "Lift is the share of this pattern's occurrences that exceed what the "
+            "base rate of its consequent predicts. 1.0 means the two co-occur "
+            "exactly as often as chance would give; above 1 means they belong "
+            "together more than that. Association is not a mechanism and says "
+            "nothing about which side causes which."
+        ),
+    )
+
+
+@router.get("/ui/mining/models")
+def mining_models() -> JSONResponse:
+    """Both models, reported as they came out.
+
+    The statement classifier separates REAL from FAKE on IFND and beats the
+    majority baseline. The direction model predicts whether a stock is up
+    tomorrow and **does not**, and this payload says so in a field the page
+    cannot decide to soften: `beats_baseline` is the model's own verdict.
+
+    Both are in one response on purpose. A page that shows the good result and
+    a different page that shows the bad one is a reader who never learns that
+    one of the project's two predictive claims failed.
+    """
+    started = time.perf_counter()
+    if not _has("mining_direction_results"):
+        return _not_built("mining_direction_results", "python -m dwm mine --op direction")
+
+    # The classifier's per-class metrics, confusion matrix and top terms are
+    # only in `mining.json`; the warehouse keeps just the direction model. A
+    # missing report degrades to None rather than failing the endpoint, because
+    # the direction half is still worth showing.
+    classifier = _mining_report().get("rq7_classifier")
+
+    with reading() as c:
+        q = _Queries(c)
+        direction = q.rows(
+            """
+            SELECT model, split, n, round(accuracy, 5) AS accuracy,
+                   round(balanced_accuracy, 5) AS balanced_accuracy,
+                   round(f1, 5) AS f1,
+                   round(baseline_majority, 5) AS baseline_majority,
+                   round(baseline_yesterday, 5) AS baseline_yesterday,
+                   round(binom_p_vs_baseline, 5) AS p_vs_baseline,
+                   round(precision_up, 5) AS precision_up,
+                   round(recall_up, 5) AS recall_up,
+                   notes
+            FROM mining_direction_results
+            ORDER BY split, accuracy DESC
+            """
+        )
+    for row in direction:
+        # The verdict is arithmetic, computed here rather than trusted from a
+        # column, so it cannot drift from the numbers beside it.
+        row["beats_baseline"] = (
+            row["accuracy"] is not None
+            and row["baseline_majority"] is not None
+            and row["accuracy"] > row["baseline_majority"]
+        )
+
+    return envelope(
+        "Classification",
+        {
+            "direction": direction,
+            "classifier": classifier,
+            "tree_rules_available": False,
+        },
+        q,
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "The direction model's test accuracy is at or below the majority "
+            "baseline, and the p-value is not significant: this project's news "
+            "features did not predict tomorrow's direction. That is reported, not "
+            "hidden. The classifier is the one result permitted to state an "
+            "accuracy, because IFND is the only source with ground truth - and "
+            "part of its Fake class is machine-generated augmentation, so even "
+            "that number is an upper bound."
+        ),
+    )
+
+
+@router.get("/ui/mining/co-mentions")
+def mining_co_mentions(min_count: int = Query(2, ge=1, le=50)) -> JSONResponse:
+    """Stocks that appear in the same headline.
+
+    **This network is sparse and the page says so.** Only 60 distinct pairs
+    exist in five years of one outlet's archive, which is a fact about stock-
+    level mentions rather than about the companies involved: name matching
+    across 47 tickers is noisy, and precision has not been measured because
+    reports/mention_audit_sample.csv has no human labels yet.
+    """
+    started = time.perf_counter()
+    if not _has("fact_news_stock_mention"):
+        return _not_built("fact_news_stock_mention", "python -m dwm link")
+    with reading() as c:
+        q = _Queries(c)
+        links = q.rows(
+            """
+            WITH pairs AS (
+                SELECT a.stock_key AS a, b.stock_key AS b,
+                       count(*) AS together,
+                       max(h.publish_date) AS last_seen,
+                       min(h.publish_date) AS first_seen
+                FROM fact_news_stock_mention a
+                JOIN fact_news_stock_mention b
+                  ON a.headline_id = b.headline_id AND a.stock_key < b.stock_key
+                JOIN fact_headline h ON h.headline_id = a.headline_id
+                WHERE h.in_window
+                GROUP BY 1, 2
+            )
+            SELECT da.symbol AS a_symbol, sec_a.sector_name AS a_sector, da.stock_key AS a,
+                   db.symbol AS b_symbol, sec_b.sector_name AS b_sector, db.stock_key AS b,
+                   p.together, p.first_seen, p.last_seen
+            FROM pairs p
+            JOIN dim_stock da ON da.stock_key = p.a
+            JOIN dim_stock db ON db.stock_key = p.b
+            LEFT JOIN dim_sector sec_a ON sec_a.sector_key = da.sector_key
+            LEFT JOIN dim_sector sec_b ON sec_b.sector_key = db.sector_key
+            WHERE p.together >= ?
+            ORDER BY p.together DESC, da.symbol
+            """,
+            [min_count],
+        )
+        nodes = q.rows(
+            """
+            SELECT d.stock_key, d.symbol, s.sector_name AS sector,
+                   count(*) AS mentions
+            FROM fact_news_stock_mention m
+            JOIN dim_stock d ON d.stock_key = m.stock_key
+            LEFT JOIN dim_sector s ON s.sector_key = d.sector_key
+            GROUP BY 1, 2, 3 ORDER BY 3, 2
+            """
+        )
+        total_pairs = q.scalar(
+            """
+            SELECT count(*) FROM (
+              SELECT 1 FROM fact_news_stock_mention a
+              JOIN fact_news_stock_mention b
+                ON a.headline_id = b.headline_id AND a.stock_key < b.stock_key
+              GROUP BY a.stock_key, b.stock_key)
+            """
+        ) or 0
+
+    return envelope(
+        "Link mining",
+        {"nodes": nodes, "links": links, "total_pairs": int(total_pairs)},
+        q,
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "An edge means both companies were named in the same headline - not "
+            "that they are related, and not that one caused the other's move. "
+            "The network is genuinely this sparse: the pair count is small because "
+            "stock-level mentions are sparse, and the precision of the name "
+            "matching has not been measured."
+        ),
+    )
+
+
+@router.post("/ui/check")
+def ui_check(payload: dict[str, Any] = Body(...)) -> JSONResponse:
+    """Score a pasted headline.
+
+    Delegates to the same `dwm.inference.checker.build_response` the v2 route
+    uses, so the two cannot disagree about the same sentence - two
+    implementations of one scorer is two answers, and only one of them would
+    have been reviewed.
+    """
+    started = time.perf_counter()
+    text = str(payload.get("headline") or "").strip()
+    if not text:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Send {'headline': '...'} with a non-empty headline."},
+            headers={"Cache-Control": "no-store"},
+        )
+    truncated = False
+    if len(text) > 2000:
+        text = text[:2000]
+        truncated = True
+
+    if not _has("fact_headline"):
+        return _not_built("fact_headline", "python -m dwm build")
+    from dwm.features.scoring import TextScorer
+    from dwm.inference.checker import build_response
+
+    with reading() as c:
+        measures = TextScorer().measure(text)
+        result = build_response(c, text, measures, truncated=truncated)
+    return envelope(
+        "Text mining",
+        result,
+        _Queries(None),
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "This scores writing style, not truth. A sensational headline can be "
+            "true and a plain one can be false, and nothing here fact-checks "
+            "anything. The percentile says where this headline sits against five "
+            "years of this outlet's own writing - not against the world."
+        ),
+    )
+
+
+@router.get("/ui/check/samples")
+def check_samples() -> JSONResponse:
+    """Real headlines from the corpus, to try the scorer on.
+
+    Real rather than invented, because a demo sentence tells a reader nothing
+    about how the scorer behaves on actual TOI copy - and rule 1 means there is
+    nothing in this repository that is not either real or from a fixture.
+    """
+    started = time.perf_counter()
+    if not _has("fact_headline"):
+        return _not_built("fact_headline", "python -m dwm build")
+    with reading() as c:
+        q = _Queries(c)
+        rows = q.rows(
+            """
+            SELECT h.headline_text AS headline, h.publish_date,
+                   round(h.sensational_score, 4) AS sensational_score,
+                   tp.topic_name AS topic
+            FROM fact_headline h
+            JOIN dim_topic tp ON tp.topic_key = h.topic_key
+            WHERE h.in_window AND length(h.headline_text) BETWEEN 40 AND 140
+            ORDER BY h.sensational_score DESC
+            LIMIT 3
+            """
+        )
+        plain = q.rows(
+            """
+            SELECT h.headline_text AS headline, h.publish_date,
+                   round(h.sensational_score, 4) AS sensational_score,
+                   tp.topic_name AS topic
+            FROM fact_headline h
+            JOIN dim_topic tp ON tp.topic_key = h.topic_key
+            WHERE h.in_window AND length(h.headline_text) BETWEEN 40 AND 140
+            ORDER BY h.sensational_score ASC
+            LIMIT 3
+            """
+        )
+    return envelope(
+        "Text mining",
+        {"hype": rows, "plain": plain},
+        q,
+        ms=(time.perf_counter() - started) * 1000.0,
+        note=(
+            "The top three are the most sensational headlines in the corpus and "
+            "the bottom three the plainest, by the same scorer the page runs. "
+            "They are real sentences from this outlet, not invented examples."
         ),
     )
 

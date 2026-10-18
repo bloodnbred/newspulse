@@ -293,6 +293,196 @@ export interface EventDetail {
    *  five-day window, and the page has to say so rather than imply otherwise. */
   nearby_events: { event_key: number; label: string; date: string; days_apart: number }[];
 }
+/* -------------------------------------------------------------------------
+ * Mining Lab
+ * ---------------------------------------------------------------------- */
+
+export interface ClusterPoint {
+  symbol: string;
+  sector: string | null;
+  cluster_id: number | null;
+  ann_volatility: number;
+  beta: number;
+  max_drawdown: number;
+  mentions_per_1000_days: number;
+  mention_sentiment: number;
+  news_sensitivity: number;
+  pc1: number;
+  pc2: number;
+  n_sessions: number;
+}
+
+/** The name is derived from the cluster's rank among its peers, not chosen by
+ *  anyone. The `most_volatile` family says which end it sits at, so the page can
+ *  label the scatter without inventing a character for it. */
+export interface ClusterProfile {
+  cluster_id: number;
+  name: string;
+  auto_named: boolean;
+  n_stocks: number;
+  median_volatility: number;
+  median_beta: number;
+  median_drawdown: number;
+  median_mentions: number;
+  median_sentiment: number;
+  median_news_sensitivity: number;
+  sectors: string;
+  most_volatile: boolean;
+  least_volatile: boolean;
+  most_market_linked: boolean;
+}
+
+export interface ClusterData {
+  points: ClusterPoint[];
+  profiles: ClusterProfile[];
+  silhouette: number | null;
+  silhouette_is_strong: boolean | null;
+  /** One cluster holds most of the sample, which is what makes a high silhouette
+   *  mean less than the number looks like. */
+  dominant_cluster_share: number | null;
+  concentration_note: string | null;
+  chosen_k: number | null;
+  k_note: string | null;
+  cluster_note: string | null;
+}
+
+export interface MarketRule {
+  rule_id: number;
+  sector_name: string | null;
+  antecedents: string;
+  consequents: string;
+  support: number;
+  confidence: number;
+  lift: number;
+  support_count: number;
+  n_transactions: number;
+}
+
+export interface RuleData {
+  rules: MarketRule[];
+  matched: number;
+  total: number;
+  thresholds: { min_support: number; min_confidence: number; min_lift: number };
+}
+
+export interface DirectionRow {
+  model: string;
+  split: string;
+  n: number;
+  accuracy: number;
+  balanced_accuracy: number;
+  f1: number;
+  baseline_majority: number;
+  baseline_yesterday: number | null;
+  p_vs_baseline: number | null;
+  precision_up: number;
+  recall_up: number;
+  notes: string | null;
+  /** Computed from the numbers beside it, so it cannot drift from them. */
+  beats_baseline: boolean;
+}
+
+export interface ClassifierModel {
+  metrics: {
+    accuracy: number;
+    majority_baseline_accuracy: number;
+    lift_over_baseline_pp: number;
+    beats_baseline: boolean;
+    per_class: Record<string, { precision: number; recall: number; f1: number; support: number }>;
+    confusion_matrix: { labels: string[]; rows_are_actual: string[]; matrix: number[][] };
+  };
+  top_terms: Record<string, { fake: number; real: number }> | unknown[];
+  classification_report: unknown;
+}
+
+export interface ClassifierPayload {
+  ran: boolean;
+  labelled_statements: number;
+  class_counts: Record<string, number>;
+  majority_baseline_accuracy: number;
+  test_count: number;
+  chosen_on_train_cv: string;
+  models: Record<string, ClassifierModel>;
+  honesty_note: string;
+  upper_bound_caveat: string;
+}
+
+export interface ModelData {
+  direction: DirectionRow[];
+  classifier: ClassifierPayload | null;
+  /** The fitted tree's rule text is not persisted between runs, so the page says
+   *  so and names the command that prints it. */
+  tree_rules_available: boolean;
+}
+
+export interface CoMention {
+  a: number;
+  b: number;
+  a_symbol: string;
+  b_symbol: string;
+  a_sector: string | null;
+  b_sector: string | null;
+  together: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface CoMentionData {
+  nodes: { stock_key: number; symbol: string; sector: string | null; mentions: number }[];
+  links: CoMention[];
+  total_pairs: number;
+}
+
+/* -------------------------------------------------------------------------
+ * Headline Lab
+ * ---------------------------------------------------------------------- */
+
+export interface CheckTag {
+  kind: string;
+  label: string;
+  href?: string;
+  confidence?: number;
+}
+
+/**
+ * The percentile is an OBJECT, not a number.
+ *
+ * The first version typed it as `number | null` and rendered `NaN` into the
+ * gauge. It carries the corpus mean and standard deviation alongside the rank,
+ * because a percentile of 99 is not interpretable without knowing what it is a
+ * percentile *of* - and `in_words` is the sentence written for a reader, which
+ * is better than one the front end assembles from the rank.
+ */
+export interface Percentile {
+  percentile: number;
+  n_corpus: number;
+  corpus_mean: number;
+  corpus_sd: number;
+  in_words: string;
+}
+
+export interface CheckResult {
+  headline: string;
+  topic: { name: string | null; confidence: number | null } | null;
+  /** Absent when the scorer could not rank the text against the corpus. */
+  percentile?: Percentile | null;
+  style: Record<string, number>;
+  tags: { stocks: CheckTag[]; sectors: CheckTag[] };
+  /** Keys are `date` / `text` / `similarity`, not the column names in
+   *  fact_headline - `dwm.inference.checker` returns the scorer's own shape. */
+  neighbours: { date: string; text: string; similarity: number }[];
+  metric_name: string;
+  is_verbatim_in_corpus: boolean;
+  truncated: boolean;
+  caveat: string;
+  disclaimer: string;
+}
+
+export interface SampleSet {
+  hype: { headline: string; publish_date: string; sensational_score: number; topic: string }[];
+  plain: { headline: string; publish_date: string; sensational_score: number; topic: string }[];
+}
+
 export interface InsightCard {
   id: string; title: string; text: string; concept: Concept; page: string;
   evidence: Record<string, number | string>;
